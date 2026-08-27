@@ -35,7 +35,10 @@ if [[ "${VOLWG_TEMPORARY:-0}" == "1" ]]; then
   exit
 fi
 
-if [[ "$(id -u)" == "0" && -f /etc/openwrt_release ]]; then
+if [[ -n "${VOLWG_INSTALL_LIB_DIR:-}" && -n "${VOLWG_INSTALL_BIN_DIR:-}" ]]; then
+  INSTALL_LIB_DIR="$VOLWG_INSTALL_LIB_DIR"
+  INSTALL_BIN_DIR="$VOLWG_INSTALL_BIN_DIR"
+elif [[ "$(id -u)" == "0" && -f /etc/openwrt_release ]]; then
   INSTALL_LIB_DIR="/usr/lib/volwg"
   INSTALL_BIN_DIR="/usr/bin"
 elif [[ "$(id -u)" == "0" ]]; then
