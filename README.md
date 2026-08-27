@@ -1,8 +1,10 @@
 # WG Home Exit
 
-用 WireGuard 将公网/优化 VPS 与位于 NAT、CGNAT 后面的家宽机连接，并在家宽端运行独立 SS2022 服务。
+用 WireGuard 将公网/优化 VPS 与位于 NAT、CGNAT 后面的一个或多个家宽机连接，并在每个家宽端运行独立 SS2022 服务。
 
 支持全自动远程部署，也支持在两个 SSH 窗口中显示公钥、手动复制粘贴完成配对。
+
+每条线路使用独立节点、独立 SS 链接和独立 Xray outbound tag。脚本不会创建默认负载均衡，选择哪条家宽线路完全由用户自己的 Xray 路由决定。
 
 ## 一键运行
 
@@ -14,7 +16,7 @@
 
     sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/chnnic/wg-home-exit/main/install.sh)"
 
-命令会临时下载主脚本和双窗口向导，退出后清理临时文件。运行后直接进入引导菜单，不需要记忆参数。
+命令会临时下载主脚本、双窗口向导和线路管理器，退出后清理临时文件。运行后直接进入引导菜单，不需要记忆参数。
 
 安全提示：一键执行远程脚本前，可以先在仓库中检查 install.sh、wg-home-deploy.sh 和 wg-home-key-wizard.sh。
 
@@ -65,7 +67,7 @@
 
     git clone https://github.com/chnnic/wg-home-exit.git
     cd wg-home-exit
-    chmod 700 wg-home-deploy.sh wg-home-key-wizard.sh
+    chmod 700 wg-home-deploy.sh wg-home-key-wizard.sh wg-home-manager.sh
 
 直接运行主脚本：
 
@@ -76,9 +78,48 @@
     1) 全自动远程部署
     2) 双 SSH 窗口：当前机器是 VPS
     3) 双 SSH 窗口：当前机器是家宽机
-    4) 查看帮助
+    4) 管理 VPS 上已部署的线路
+    5) 查看帮助
 
-选择全自动部署后，向导会依次询问部署结构、两端 SSH、端口、网段和 SSH 私钥，不需要记忆命令行参数。
+选择全自动部署后，向导会依次询问节点 ID、线路显示名称、部署结构、两端 SSH、端口、网段和 SSH 私钥，不需要记忆命令行参数。
+
+## 一台 VPS 连接多个家宽机
+
+每个家宽节点必须使用不同的节点 ID、WireGuard 端口和 WireGuard 网段。多个 relay 节点还必须使用不同的公网 SS 端口。
+
+例如第一条印尼雅加达线路：
+
+    ./wg-home-deploy.sh --mode relay \
+      --node jkt1 --name "印尼雅加达家宽" \
+      --vps root@203.0.113.10 --vps-public-host 203.0.113.10 \
+      --home root@home-jkt.example.com \
+      --wg-port 51830 --wg-prefix 10.88.1 --ss-port 31001
+
+第二条印尼泗水线路：
+
+    ./wg-home-deploy.sh --mode relay \
+      --node sby1 --name "印尼泗水家宽" \
+      --vps root@203.0.113.10 --vps-public-host 203.0.113.10 \
+      --home root@home-sby.example.com \
+      --wg-port 51831 --wg-prefix 10.88.2 --ss-port 31002
+
+部署完成后，登录 VPS 使用管理后台：
+
+    sudo wg-home-manager menu
+
+也可以直接查询：
+
+    sudo wg-home-manager list
+    sudo wg-home-manager links
+    sudo wg-home-manager show jkt1
+    sudo wg-home-manager status
+    sudo wg-home-manager rename jkt1 "印尼雅加达二号线"
+
+`links` 会按自定义线路名称分别显示 SS 链接。relay 显示公网可用链接；direct 显示 WireGuard 私网链接和 Xray outbound，仅供对应 VPS 使用。
+
+旧版本已经部署好的线路不会被自动覆盖。可以运行下面的命令，将旧 SS 链接粘贴登记到管理后台，并重新设置易于区分的名称：
+
+    sudo wg-home-manager register
 
 ## 双 SSH 窗口交换公钥
 
@@ -130,6 +171,7 @@ SSH 可能短暂断开，重新连接后使用以下命令检查：
 公网中转：
 
     ./wg-home-deploy.sh --mode relay \
+      --node jkt1 --name "印尼雅加达家宽" \
       --vps root@203.0.113.10 \
       --vps-public-host 203.0.113.10 \
       --home root@home.example.com \
@@ -139,6 +181,7 @@ SSH 可能短暂断开，重新连接后使用以下命令检查：
 优化机直连：
 
     ./wg-home-deploy.sh --mode direct \
+      --node sby1 --name "印尼泗水家宽" \
       --vps root@198.51.100.20 \
       --vps-public-host 198.51.100.20 \
       --home root@home.example.com \
@@ -148,7 +191,10 @@ SSH 可能短暂断开，重新连接后使用以下命令检查：
 
     ./wg-home-deploy.sh --help
 
-## 默认值
+## 节点和默认值
+
+- 节点 ID：home1（1-8 位小写字母、数字或下划线）
+- 线路显示名称：家宽线路 1
 
 - WireGuard 网段：10.88.0.0/24
 - VPS 隧道地址：10.88.0.1
@@ -158,16 +204,16 @@ SSH 可能短暂断开，重新连接后使用以下命令检查：
 - SS2022 加密：2022-blake3-aes-256-gcm
 - PersistentKeepalive：25 秒
 
-可通过 --wg-prefix、--wg-port 和 --ss-port 修改，避免和现有网络、端口冲突。
+可通过 --node、--name、--wg-prefix、--wg-port 和 --ss-port 修改。脚本会检查已登记节点的端口和网段冲突；同一节点 ID 默认禁止覆盖，确认需要更新时使用 `--replace`。
 
 ## Xray 路由
 
-把脚本输出的 Shadowsocks outbound 加入优化机 outbounds，然后将需要落地家宽的入站指向它：
+把脚本输出的 Shadowsocks outbound 加入优化机 outbounds，然后将需要落地家宽的入站指向它。每个节点的 tag 为 `home-节点ID`，脚本不会添加 balancer 或负载均衡规则：
 
     {
       "type": "field",
       "inboundTag": ["需要走家宽的入站 tag"],
-      "outboundTag": "indonesia-home"
+      "outboundTag": "home-jkt1"
     }
 
 脚本同时输出新版 Xray 和旧版 settings.servers 两种 Shadowsocks outbound 格式。
@@ -186,6 +232,7 @@ SS2022、SSH 私钥和 WireGuard 私钥均属于敏感信息，不要公开。
 - install.sh：一键下载和启动入口。
 - wg-home-deploy.sh：完整部署脚本和引导式入口。
 - wg-home-key-wizard.sh：双 SSH 窗口 WireGuard 公钥交换向导。
+- wg-home-manager.sh：安装到 VPS 的多线路查看和 SS 链接管理后台。
 
 ## 注意
 
