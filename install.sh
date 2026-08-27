@@ -73,7 +73,7 @@ if [[ ":$PATH:" != *":$INSTALL_BIN_DIR:"* ]]; then
     if [[ ! -f "$SHELL_RC" ]] || ! grep -Fqx "$PATH_LINE" "$SHELL_RC"; then
       printf '\n%s\n' "$PATH_LINE" >>"$SHELL_RC"
     fi
-    echo "已把 $INSTALL_BIN_DIR 加入 $SHELL_RC，新开终端后可直接输入 volwg。"
+    echo "已把 ${INSTALL_BIN_DIR} 加入 ${SHELL_RC}，新开终端后可直接输入 volwg。"
   else
     echo "提示：$INSTALL_BIN_DIR 不在当前 PATH，请把它加入 shell 的 PATH。"
   fi

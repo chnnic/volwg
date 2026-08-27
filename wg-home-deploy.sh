@@ -98,7 +98,7 @@ die() {
 prompt_required() {
   local prompt="$1" answer=""
   while [[ -z "$answer" ]]; do
-    read -r -p "$prompt：" answer
+    read -r -p "${prompt}：" answer
   done
   printf '%s' "$answer"
 }
@@ -356,8 +356,8 @@ trap cleanup EXIT
 echo "节点 ID：$NODE_ID"
 echo "线路名称：$DISPLAY_NAME"
 echo "部署模式：$MODE"
-echo "公网/优化 VPS：$VPS_TARGET（SSH $VPS_SSH_PORT）"
-echo "家宽机：$OPENWRT_TARGET（SSH $OPENWRT_SSH_PORT）"
+echo "公网/优化 VPS：${VPS_TARGET}（SSH ${VPS_SSH_PORT}）"
+echo "家宽机：${OPENWRT_TARGET}（SSH ${OPENWRT_SSH_PORT}）"
 echo "家宽服务端：$HOME_BACKEND"
 echo "WireGuard：${WG_IFACE}，${WG_PREFIX}.1 ↔ ${WG_PREFIX}.2"
 echo "  VPS 公网 UDP：$VPS_WG_PORT"
@@ -1019,7 +1019,7 @@ fi
 echo "私网 Xray outbound（tag：home-$NODE_ID-private，推荐线路机使用）："
 cat "$TMP_DIR/xray-outbound-private.json"
 echo
-echo "兼容输出：默认入口 Xray outbound（tag：home-$NODE_ID）："
+echo "兼容输出：默认入口 Xray outbound（tag：home-${NODE_ID}）："
 cat "$TMP_DIR/xray-outbound.json"
 echo
 echo "旧版 Xray 若提示 0 Shadowsocks server configured，默认入口改用 settings.servers："
