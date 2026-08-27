@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-REPO_RAW_URL="https://raw.githubusercontent.com/chnnic/volwg/main"
+REPO_REF="${VOLWG_REF:-main}"
+REPO_RAW_URL="https://raw.githubusercontent.com/chnnic/volwg/$REPO_REF"
 TMP_DIR="$(mktemp -d)"
 umask 077
 
