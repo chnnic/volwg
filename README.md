@@ -88,6 +88,8 @@ root 用户安装到 `/usr/local/bin/volwg`；OpenWrt root 安装到 `/usr/bin/v
 
 选择全自动部署后，向导会依次询问节点 ID、线路显示名称、部署结构、两端 SSH、端口、网段和 SSH 私钥，不需要记忆命令行参数。
 
+在 VPS 本机选择第 4 项时，VolWG 会自动打开本机线路后台，不再要求重复输入本机 SSH。只有在控制电脑没有检测到本地线路时，才会询问远程 VPS 地址。
+
 ## 一台 VPS 连接多个家宽机
 
 每个家宽节点必须使用不同的节点 ID、WireGuard 端口和 WireGuard 网段。多个 relay 节点还必须使用不同的公网 SS 端口。
@@ -125,6 +127,8 @@ root 用户安装到 `/usr/local/bin/volwg`；OpenWrt root 安装到 `/usr/bin/v
 旧版本已经部署好的线路不会被自动覆盖。可以运行下面的命令，将旧 SS 链接粘贴登记到管理后台，并重新设置易于区分的名称：
 
     sudo volwg manager register
+
+旧版 VPS 只保存 WireGuard 和转发规则，没有保存 SS 密钥，因此首次登记需要粘贴原来的 SS 链接；登记后便会长期保存在后台。
 
 ## 双 SSH 窗口交换公钥
 

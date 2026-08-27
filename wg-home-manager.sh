@@ -82,6 +82,16 @@ node_status() {
   fi
 }
 
+legacy_notice() {
+  local files=("$STATE_DIR"/*.conf)
+  if [[ ! -e "${files[0]}" && -f /etc/wireguard/wg-home.conf ]]; then
+    echo "检测到旧版单线路配置：/etc/wireguard/wg-home.conf"
+    echo "旧版没有在 VPS 保存 SS 密钥/链接，因此无法自动重建链接。"
+    echo '请执行“登记已有 SS 线路”，粘贴原 SS 链接后即可在后台查看。'
+    echo
+  fi
+}
+
 list_nodes() {
   local file id name mode iface endpoint status found=0
   printf '%-10s %-24s %-8s %-18s %-22s %s\n' "节点ID" "线路名称" "模式" "WG接口" "SS地址" "状态"
@@ -221,6 +231,7 @@ EOF
 
 menu() {
   local choice node_id new_name
+  legacy_notice
   while true; do
     echo "============================================================"
     echo " VolWG 线路管理"

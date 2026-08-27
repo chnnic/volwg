@@ -143,6 +143,10 @@ if (($# == 0)); then
       exec bash "$SCRIPT_DIR/wg-home-key-wizard.sh" --role home
       ;;
     4)
+      if [[ -d /etc/wg-home-exit/nodes || -f /etc/wireguard/wg-home.conf ]] || compgen -G '/etc/wireguard/wgh_*.conf' >/dev/null; then
+        exec bash "$SCRIPT_DIR/wg-home-manager.sh" menu
+      fi
+      echo "本机没有检测到 VolWG/WireGuard 线路，将连接另一台 VPS。"
       manager_vps="$(prompt_required "VPS SSH，例如 root@203.0.113.10")"
       manager_port="$(prompt_with_default "VPS SSH 端口" "22")"
       read -r -p "SSH 私钥路径（留空使用 ssh-agent/~/.ssh/config）：" manager_identity
