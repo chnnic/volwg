@@ -110,22 +110,37 @@ prompt_with_default() {
 }
 
 guided_full_deploy() {
-  local mode_choice backend_choice public_ss_answer identity_answer default_public_host
+  local mode_choice backend_choice public_ss_choice identity_answer default_public_host
 
   echo
-  echo "请选择部署结构："
+  echo "[1/4] 线路基本信息"
+  echo "------------------------------------------------------------"
+  NODE_ID="$(prompt_with_default "节点 ID（1-8 位小写字母/数字/_）" "$NODE_ID")"
+  DISPLAY_NAME="$(prompt_with_default "线路显示名称/SS 链接名称" "$DISPLAY_NAME")"
+  echo
+  echo "部署结构："
   echo "  1) relay：推荐公网 SS 入口（同时生成私网入口）"
   echo "  2) direct：推荐 WireGuard 私网入口（同时生成公网入口）"
-  read -r -p "输入 1 或 2：" mode_choice
-  case "$mode_choice" in
+  read -r -p "请选择 [1-2，默认 1]：" mode_choice
+  case "${mode_choice:-1}" in
     1) MODE="relay" ;;
     2) MODE="direct" ;;
     *) die "部署结构选择无效" ;;
   esac
+  echo
+  echo "家宽机 SS2022 服务端："
+  echo "  1) ss-rust ssserver（推荐，轻量）"
+  echo "  2) Xray Core（兼容模式）"
+  read -r -p "请选择 [1-2，默认 1]：" backend_choice
+  case "${backend_choice:-1}" in
+    1) HOME_BACKEND="ss-rust" ;;
+    2) HOME_BACKEND="xray" ;;
+    *) die "家宽服务端后端选择无效" ;;
+  esac
 
-  NODE_ID="$(prompt_with_default "节点 ID（1-8 位小写字母/数字/_）" "$NODE_ID")"
-  DISPLAY_NAME="$(prompt_with_default "线路显示名称/SS 链接名称" "$DISPLAY_NAME")"
-
+  echo
+  echo "[2/4] SSH 连接信息"
+  echo "------------------------------------------------------------"
   VPS_TARGET="$(prompt_required "公网/优化 VPS SSH，例如 root@203.0.113.10")"
   VPS_SSH_PORT="$(prompt_with_default "VPS SSH 端口" "$VPS_SSH_PORT")"
   default_public_host="${VPS_TARGET#*@}"
@@ -134,50 +149,45 @@ guided_full_deploy() {
   OPENWRT_SSH_PORT="$(prompt_with_default "家宽机 SSH 端口" "$OPENWRT_SSH_PORT")"
   read -r -p "SSH 私钥路径（留空使用 ssh-agent/~/.ssh/config）：" identity_answer
   IDENTITY="$identity_answer"
+
+  echo
+  echo "[3/4] WireGuard 网络"
+  echo "------------------------------------------------------------"
   WG_PREFIX="$(prompt_with_default "WireGuard 网段前缀" "$WG_PREFIX")"
   VPS_WG_PORT="$(prompt_with_default "VPS WireGuard 公网 UDP 端口" "$VPS_WG_PORT")"
   HOME_WG_PORT="$(prompt_with_default "家宽机 WireGuard 本地 UDP 端口" "$HOME_WG_PORT")"
-  HOME_SS_PORT="$(prompt_with_default "家宽机 SS2022 TCP/UDP 端口" "$HOME_SS_PORT")"
-  VPS_SS_PORT="$(prompt_with_default "VPS 公网 SS TCP/UDP 端口" "$VPS_SS_PORT")"
-  public_ss_answer="$(prompt_with_default "生成并开放公网 SS（on/off）" "on")"
-  case "$public_ss_answer" in
-    on) PUBLIC_SS_ENABLED="1" ;;
-    off) PUBLIC_SS_ENABLED="0" ;;
-    *) die "公网 SS 开关必须是 on 或 off" ;;
-  esac
+
   echo
-  echo "请选择家宽机 SS2022 服务端后端："
-  echo "  1) ss-rust ssserver（推荐，轻量）"
-  echo "  2) Xray Core（兼容模式）"
-  read -r -p "输入 1 或 2 [1]：" backend_choice
-  case "${backend_choice:-1}" in
-    1) HOME_BACKEND="ss-rust" ;;
-    2) HOME_BACKEND="xray" ;;
-    *) die "家宽服务端后端选择无效" ;;
+  echo "[4/4] Shadowsocks 入口"
+  echo "------------------------------------------------------------"
+  HOME_SS_PORT="$(prompt_with_default "家宽机 SS2022 TCP/UDP 端口" "$HOME_SS_PORT")"
+  echo "  1) 同时生成公网和私网 SS（推荐）"
+  echo "  2) 仅生成 WireGuard 私网 SS"
+  read -r -p "请选择 [1-2，默认 1]：" public_ss_choice
+  case "${public_ss_choice:-1}" in
+    1) PUBLIC_SS_ENABLED="1" ;;
+    2) PUBLIC_SS_ENABLED="0" ;;
+    *) die "SS 入口选择无效" ;;
   esac
+  if [[ "$PUBLIC_SS_ENABLED" == "1" ]]; then
+    VPS_SS_PORT="$(prompt_with_default "VPS 公网 SS TCP/UDP 端口" "$VPS_SS_PORT")"
+  fi
 }
 
 if (($# == 0)); then
   echo "============================================================"
   echo " VolWG 多线路家宽落地部署向导"
   echo "============================================================"
-  echo "  1) 全自动远程部署"
-  echo "  2) 双 SSH 窗口：当前机器是 VPS"
-  echo "  3) 双 SSH 窗口：当前机器是家宽机"
-  echo "  4) 管理 VPS 上已部署的线路"
+  echo "  1) 全自动部署新线路（推荐）"
+  echo "  2) 管理已部署线路"
+  echo "  3) 手动配对：当前机器是 VPS"
+  echo "  4) 手动配对：当前机器是家宽机"
   echo "  5) 查看帮助"
-  read -r -p "请选择 [1-5]：" entry_choice
+  echo "  0) 退出"
+  read -r -p "请选择 [0-5]：" entry_choice
   case "$entry_choice" in
     1) GUIDED="1" ;;
     2)
-      [[ -f "$SCRIPT_DIR/wg-home-key-wizard.sh" ]] || die "缺少 wg-home-key-wizard.sh"
-      exec bash "$SCRIPT_DIR/wg-home-key-wizard.sh" --role vps
-      ;;
-    3)
-      [[ -f "$SCRIPT_DIR/wg-home-key-wizard.sh" ]] || die "缺少 wg-home-key-wizard.sh"
-      exec bash "$SCRIPT_DIR/wg-home-key-wizard.sh" --role home
-      ;;
-    4)
       if [[ -d /etc/wg-home-exit/nodes || -f /etc/wireguard/wg-home.conf ]] || compgen -G '/etc/wireguard/wgh_*.conf' >/dev/null; then
         exec bash "$SCRIPT_DIR/wg-home-manager.sh" menu
       fi
@@ -191,7 +201,16 @@ if (($# == 0)); then
       fi
       exec ssh -t "${manager_ssh[@]}" "$manager_vps" "wg-home-manager menu"
       ;;
+    3)
+      [[ -f "$SCRIPT_DIR/wg-home-key-wizard.sh" ]] || die "缺少 wg-home-key-wizard.sh"
+      exec bash "$SCRIPT_DIR/wg-home-key-wizard.sh" --role vps
+      ;;
+    4)
+      [[ -f "$SCRIPT_DIR/wg-home-key-wizard.sh" ]] || die "缺少 wg-home-key-wizard.sh"
+      exec bash "$SCRIPT_DIR/wg-home-key-wizard.sh" --role home
+      ;;
     5) usage; exit 0 ;;
+    0) exit 0 ;;
     *) die "入口选择无效" ;;
   esac
 fi

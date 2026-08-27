@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 REPO_RAW_URL="https://raw.githubusercontent.com/chnnic/volwg/main"
-BUILTIN_VERSION="1.4.2"
+BUILTIN_VERSION="1.4.3"
 
 find_lib_dir() {
   local launcher_dir user_data_dir
@@ -86,6 +86,24 @@ EOF
   echo "============================================================"
 }
 
+local_node_count() {
+  local -a files
+  shopt -s nullglob
+  files=(/etc/wg-home-exit/nodes/*.conf)
+  printf '%s' "${#files[@]}"
+}
+
+print_menu_title() {
+  local title="$1" count
+  count="$(local_node_count)"
+  echo " 菜单：$title"
+  if ((count > 0)); then
+    echo " 本机已登记线路：$count 条"
+  fi
+  echo "------------------------------------------------------------"
+  echo
+}
+
 show_version() {
   local latest=""
   echo "当前版本：v$(current_version)"
@@ -156,18 +174,18 @@ deployment_menu() {
   while true; do
     clear_screen
     print_header
-    echo " 部署与配对"
-    echo
-    echo "  1) 全自动远程部署"
-    echo "  2) 双 SSH 窗口：当前机器是 VPS"
-    echo "  3) 双 SSH 窗口：当前机器是家宽机"
-    echo "  0) 返回主菜单"
-    read -r -p "请选择 [0-3]：" choice
+    print_menu_title "主菜单 > 新建线路与配对"
+    echo "  1) 全自动部署新线路（推荐）"
+    echo "  2) 手动配对：当前机器是 VPS"
+    echo "  3) 手动配对：当前机器是家宽机"
+    echo "  0) 返回主菜单    q) 退出"
+    read -r -p "请选择 [0-3/q]：" choice
     case "$choice" in
       1) bash "$LIB_DIR/wg-home-deploy.sh" --guided; pause_screen ;;
       2) bash "$LIB_DIR/wg-home-key-wizard.sh" --role vps; pause_screen ;;
       3) bash "$LIB_DIR/wg-home-key-wizard.sh" --role home; pause_screen ;;
       0) return ;;
+      q|Q) clear_screen; exit 0 ;;
       *) echo "选择无效。"; pause_screen ;;
     esac
   done
@@ -178,20 +196,20 @@ management_menu() {
   while true; do
     clear_screen
     print_header
-    echo " 线路管理"
-    echo
-    echo "  1) 管理本机线路"
-    echo "  2) 连接远程 VPS 管理"
-    echo "  3) 快速查看本机全部 SS 链接"
-    echo "  4) 快速查看本机握手状态"
-    echo "  0) 返回主菜单"
-    read -r -p "请选择 [0-4]：" choice
+    print_menu_title "主菜单 > 线路管理"
+    echo "  1) 打开本机线路管理"
+    echo "  2) 快速查看全部 SS 链接"
+    echo "  3) 快速查看线路状态"
+    echo "  4) 连接远程 VPS 管理"
+    echo "  0) 返回主菜单    q) 退出"
+    read -r -p "请选择 [0-4/q]：" choice
     case "$choice" in
       1) bash "$LIB_DIR/wg-home-manager.sh" menu ;;
-      2) remote_manager; pause_screen ;;
-      3) clear_screen; bash "$LIB_DIR/wg-home-manager.sh" links; pause_screen ;;
-      4) clear_screen; bash "$LIB_DIR/wg-home-manager.sh" status; pause_screen ;;
+      2) clear_screen; bash "$LIB_DIR/wg-home-manager.sh" links; pause_screen ;;
+      3) clear_screen; bash "$LIB_DIR/wg-home-manager.sh" status; pause_screen ;;
+      4) remote_manager; pause_screen ;;
       0) return ;;
+      q|Q) clear_screen; exit 0 ;;
       *) echo "选择无效。"; pause_screen ;;
     esac
   done
@@ -202,18 +220,18 @@ system_menu() {
   while true; do
     clear_screen
     print_header
-    echo " 系统维护"
-    echo
-    echo "  1) 查看版本"
-    echo "  2) 在线升级"
+    print_menu_title "主菜单 > 系统维护"
+    echo "  1) 检查并在线升级"
+    echo "  2) 查看版本"
     echo "  3) 查看命令帮助"
-    echo "  0) 返回主菜单"
-    read -r -p "请选择 [0-3]：" choice
+    echo "  0) 返回主菜单    q) 退出"
+    read -r -p "请选择 [0-3/q]：" choice
     case "$choice" in
-      1) clear_screen; show_version; pause_screen ;;
-      2) clear_screen; online_update; pause_screen ;;
+      1) clear_screen; online_update; pause_screen ;;
+      2) clear_screen; show_version; pause_screen ;;
       3) clear_screen; show_help; pause_screen ;;
       0) return ;;
+      q|Q) clear_screen; exit 0 ;;
       *) echo "选择无效。"; pause_screen ;;
     esac
   done
@@ -238,16 +256,17 @@ main_menu() {
   while true; do
     clear_screen
     print_header
-    echo "  1) 部署与配对"
-    echo "  2) 线路管理"
+    print_menu_title "主菜单"
+    echo "  1) 线路管理"
+    echo "  2) 新建线路与配对"
     echo "  3) 系统维护与在线升级"
-    echo "  0) 退出"
-    read -r -p "请选择 [0-3]：" choice
+    echo "  0) 退出    q) 退出"
+    read -r -p "请选择 [0-3/q]：" choice
     case "$choice" in
-      1) deployment_menu ;;
-      2) management_menu ;;
+      1) management_menu ;;
+      2) deployment_menu ;;
       3) system_menu ;;
-      0) clear_screen; return ;;
+      0|q|Q) clear_screen; return ;;
       *) echo "选择无效。"; pause_screen ;;
     esac
   done

@@ -23,6 +23,18 @@ pause_screen() {
   read -r -p "按 Enter 返回线路菜单..." _
 }
 
+manager_header() {
+  local title="$1"
+  local -a files
+  shopt -s nullglob
+  files=("$STATE_DIR"/*.conf)
+  echo "============================================================"
+  echo " VolWG 线路管理 · $title"
+  echo " 已登记线路：${#files[@]} 条"
+  echo "============================================================"
+  echo
+}
+
 usage() {
   cat <<'EOF'
 用法：
@@ -199,6 +211,36 @@ node_file() {
   [[ "$node_id" =~ ^[a-z0-9][a-z0-9_]{0,7}$ ]] || die "节点 ID 无效"
   [[ -f "$STATE_DIR/$node_id.conf" ]] || die "找不到节点：$node_id"
   printf '%s' "$STATE_DIR/$node_id.conf"
+}
+
+SELECTED_NODE=""
+choose_node() {
+  local file choice index=1 id name mode
+  local -a files
+  SELECTED_NODE=""
+  shopt -s nullglob
+  files=("$STATE_DIR"/*.conf)
+  clear_screen
+  manager_header "选择线路"
+  if ((${#files[@]} == 0)); then
+    echo "尚未登记可选择的线路。"
+    echo "可返回菜单使用：登记旧版或手工线路。"
+    pause_screen
+    return 1
+  fi
+  for file in "${files[@]}"; do
+    id="$(field "$file" NODE_ID)"
+    name="$(decode "$(field "$file" DISPLAY_NAME_B64)")"
+    mode="$(field "$file" MODE)"
+    printf '  %d) %-24.24s  [%s / %s]\n' "$index" "$name" "$id" "$mode"
+    ((index++))
+  done
+  echo "  0) 返回线路菜单"
+  read -r -p "请选择线路 [0-$((${#files[@]}))]：" choice
+  [[ "$choice" =~ ^[0-9]+$ ]] || { echo "选择无效。"; pause_screen; return 1; }
+  ((choice == 0)) && return 1
+  ((choice >= 1 && choice <= ${#files[@]})) || { echo "选择无效。"; pause_screen; return 1; }
+  SELECTED_NODE="$(field "${files[choice-1]}" NODE_ID)"
 }
 
 node_status() {
@@ -521,46 +563,30 @@ EOF
 }
 
 menu() {
-  local choice node_id new_name export_choice export_format
+  local choice new_name export_choice export_format
   while true; do
     clear_screen
-    echo "============================================================"
-    echo " VolWG 线路管理"
-    echo "============================================================"
+    manager_header "主菜单"
     legacy_notice
-    echo "  1) 查看所有线路"
-    echo "  2) 查看所有 SS 链接"
-    echo "  3) 查看单条线路详情"
-    echo "  4) 查看握手状态"
-    echo "  5) 修改线路/链接名称"
-    echo "  6) 登记已有 SS 线路"
-    echo "  7) 生成/导出图形化 Xray 节点"
-    echo "  0) 退出"
-    read -r -p "请选择 [0-7]：" choice
+    echo "  1) 查看全部公网/私网 SS 链接"
+    echo "  2) 查看线路概览与状态"
+    echo "  3) 导出 SS / Xray 图形化节点"
+    echo "  4) 查看单条线路详细配置"
+    echo "  5) 查看 WireGuard 握手状态"
+    echo "  6) 修改线路/链接名称"
+    echo "  7) 登记旧版或手工线路"
+    echo "  0) 返回上级菜单    q) 退出"
+    read -r -p "请选择 [0-7/q]：" choice
     echo
     case "$choice" in
-      1) clear_screen; list_nodes; pause_screen ;;
-      2) clear_screen; list_links; pause_screen ;;
+      1) clear_screen; manager_header "全部 SS 链接"; list_links; pause_screen ;;
+      2) clear_screen; manager_header "线路概览"; list_nodes; pause_screen ;;
       3)
+        choose_node || continue
         clear_screen
-        read -r -p "输入节点 ID：" node_id
-        show_node "$(node_file "$node_id")"
-        pause_screen
-        ;;
-      4) clear_screen; show_status; pause_screen ;;
-      5)
-        clear_screen
-        read -r -p "输入节点 ID：" node_id
-        read -r -p "输入新的线路名称：" new_name
-        rename_node "$(node_file "$node_id")" "$new_name"
-        pause_screen
-        ;;
-      6) clear_screen; register_node; pause_screen ;;
-      7)
-        clear_screen
-        read -r -p "输入节点 ID：" node_id
+        manager_header "导出节点 · $SELECTED_NODE"
         echo "格式：1) 全部  2) SS 链接  3) Xray outbound  4) routing"
-        read -r -p "请选择 [1-4]：" export_choice
+        read -r -p "请选择 [1-4，默认 1]：" export_choice
         case "$export_choice" in
           1|"") export_format="all" ;;
           2) export_format="ss" ;;
@@ -568,11 +594,32 @@ menu() {
           4) export_format="routing" ;;
           *) echo "格式选择无效。"; pause_screen; continue ;;
         esac
-        export_node "$(node_file "$node_id")" "$export_format"
+        clear_screen
+        manager_header "节点导出 · $SELECTED_NODE"
+        export_node "$(node_file "$SELECTED_NODE")" "$export_format"
         pause_screen
         ;;
+      4)
+        choose_node || continue
+        clear_screen
+        manager_header "线路详情 · $SELECTED_NODE"
+        show_node "$(node_file "$SELECTED_NODE")"
+        pause_screen
+        ;;
+      5) clear_screen; manager_header "WireGuard 状态"; show_status; pause_screen ;;
+      6)
+        choose_node || continue
+        clear_screen
+        manager_header "修改线路名称 · $SELECTED_NODE"
+        read -r -p "输入新的线路名称（留空取消）：" new_name
+        [[ -n "$new_name" ]] || continue
+        rename_node "$(node_file "$SELECTED_NODE")" "$new_name"
+        pause_screen
+        ;;
+      7) clear_screen; manager_header "登记已有线路"; register_node; pause_screen ;;
       0) return ;;
-      *) echo "选择无效。" ;;
+      q|Q) clear_screen; exit 0 ;;
+      *) echo "选择无效。"; pause_screen ;;
     esac
     echo
   done
