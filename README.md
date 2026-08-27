@@ -4,6 +4,20 @@
 
 支持全自动远程部署，也支持在两个 SSH 窗口中显示公钥、手动复制粘贴完成配对。
 
+## 一键运行
+
+在控制电脑、VPS 或家宽机执行：
+
+    bash -c "$(curl -fsSL https://raw.githubusercontent.com/chnnic/wg-home-exit/main/install.sh)"
+
+如果当前机器需要 root 权限，例如在 VPS 或 Debian 家宽机配置本机 WireGuard：
+
+    sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/chnnic/wg-home-exit/main/install.sh)"
+
+命令会临时下载主脚本和双窗口向导，退出后清理临时文件。运行后直接进入引导菜单，不需要记忆参数。
+
+安全提示：一键执行远程脚本前，可以先在仓库中检查 install.sh、wg-home-deploy.sh 和 wg-home-key-wizard.sh。
+
 ## 支持系统
 
 公网或优化 VPS：
@@ -169,6 +183,7 @@ SS2022、SSH 私钥和 WireGuard 私钥均属于敏感信息，不要公开。
 
 ## 文件
 
+- install.sh：一键下载和启动入口。
 - wg-home-deploy.sh：完整部署脚本和引导式入口。
 - wg-home-key-wizard.sh：双 SSH 窗口 WireGuard 公钥交换向导。
 
