@@ -37,7 +37,8 @@ usage() {
 
 说明：
   每条线路彼此独立，不会自动配置负载均衡。
-  relay 显示公网 SS 链接；direct 显示仅 VPS 本机可达的隧道 SS 链接和 Xray outbound。
+  新部署默认同时保存公网和 WireGuard 私网 SS 链接；relay/direct 仅代表推荐入口。
+  私网链接只能在已连接对应 WireGuard 隧道的 VPS/Xray 中使用。
   node 格式可选：ss、xray、routing、all（默认 all）。
 EOF
 }
@@ -64,6 +65,15 @@ encode() {
   printf '%s' "$1" | base64 | tr -d '\r\n'
 }
 
+set_field_value() {
+  local file="$1" key="$2" value="$3"
+  if grep -q "^${key}=" "$file"; then
+    sed -i "s|^${key}=.*|${key}=${value}|" "$file"
+  else
+    printf '%s=%s\n' "$key" "$value" >>"$file"
+  fi
+}
+
 urlencode() {
   local LC_ALL=C input="$1" output="" char hex index
   for ((index=0; index<${#input}; index++)); do
@@ -77,6 +87,111 @@ urlencode() {
     esac
   done
   printf '%s' "$output"
+}
+
+public_ss_enabled() {
+  local file="$1" value mode
+  value="$(field "$file" PUBLIC_SS_ENABLED)"
+  if [[ -z "$value" ]]; then
+    mode="$(field "$file" MODE)"
+    [[ "$mode" == "relay" ]] && value="1" || value="0"
+  fi
+  printf '%s' "$value"
+}
+
+rewrite_ss_endpoint() {
+  local link="$1" endpoint="$2" base fragment=""
+  [[ -n "$link" && -n "$endpoint" ]] || return 0
+  if [[ "$link" == *#* ]]; then
+    base="${link%%#*}"
+    fragment="#${link#*#}"
+  else
+    base="$link"
+  fi
+  if [[ "$base" != ss://*@* ]]; then
+    printf '%s' "$link"
+    return
+  fi
+  printf '%s@%s%s' "${base%@*}" "$endpoint" "$fragment"
+}
+
+rewrite_ss_name() {
+  local link="$1" name="$2"
+  [[ -n "$link" ]] || return 0
+  printf '%s#%s' "${link%%#*}" "$(urlencode "$name")"
+}
+
+private_ss_endpoint() {
+  local file="$1" endpoint prefix port
+  endpoint="$(field "$file" PRIVATE_SS_ENDPOINT)"
+  if [[ -z "$endpoint" ]]; then
+    prefix="$(field "$file" WG_PREFIX)"
+    port="$(field_fallback "$file" HOME_SS_PORT SS_PORT)"
+    [[ -n "$prefix" && -n "$port" ]] && endpoint="$prefix.2:$port"
+  fi
+  printf '%s' "$endpoint"
+}
+
+public_ss_endpoint() {
+  local file="$1" endpoint mode
+  [[ "$(public_ss_enabled "$file")" == "1" ]] || return 0
+  endpoint="$(field "$file" PUBLIC_SS_ENDPOINT)"
+  if [[ -z "$endpoint" ]]; then
+    mode="$(field "$file" MODE)"
+    [[ "$mode" == "relay" ]] && endpoint="$(field "$file" SS_ENDPOINT)"
+  fi
+  printf '%s' "$endpoint"
+}
+
+private_ss_link() {
+  local file="$1" link legacy endpoint
+  link="$(decode "$(field "$file" PRIVATE_SS_LINK_B64)")"
+  if [[ -z "$link" ]]; then
+    legacy="$(decode "$(field "$file" SS_LINK_B64)")"
+    endpoint="$(private_ss_endpoint "$file")"
+    link="$(rewrite_ss_endpoint "$legacy" "$endpoint")"
+  fi
+  printf '%s' "$link"
+}
+
+public_ss_link() {
+  local file="$1" link legacy endpoint mode
+  [[ "$(public_ss_enabled "$file")" == "1" ]] || return 0
+  link="$(decode "$(field "$file" PUBLIC_SS_LINK_B64)")"
+  if [[ -z "$link" ]]; then
+    mode="$(field "$file" MODE)"
+    legacy="$(decode "$(field "$file" SS_LINK_B64)")"
+    endpoint="$(public_ss_endpoint "$file")"
+    if [[ "$mode" == "relay" && -n "$endpoint" ]]; then
+      link="$(rewrite_ss_endpoint "$legacy" "$endpoint")"
+    fi
+  fi
+  printf '%s' "$link"
+}
+
+outbound_for() {
+  local file="$1" kind="$2" id mode saved legacy endpoint host port
+  id="$(field "$file" NODE_ID)"
+  mode="$(field "$file" MODE)"
+  if [[ "$kind" == "public" ]]; then
+    saved="$(decode "$(field "$file" PUBLIC_XRAY_OUTBOUND_B64)")"
+    endpoint="$(public_ss_endpoint "$file")"
+  else
+    saved="$(decode "$(field "$file" PRIVATE_XRAY_OUTBOUND_B64)")"
+    endpoint="$(private_ss_endpoint "$file")"
+  fi
+  if [[ -n "$saved" ]]; then
+    printf '%s' "$saved"
+    return
+  fi
+  legacy="$(decode "$(field "$file" XRAY_OUTBOUND_B64)")"
+  [[ -n "$legacy" && -n "$endpoint" ]] || return 0
+  host="${endpoint%:*}"
+  port="${endpoint##*:}"
+  printf '%s\n' "$legacy" | sed -E \
+    -e "s/\"tag\"[[:space:]]*:[[:space:]]*\"home-$id\"/\"tag\": \"home-$id-$kind\"/" \
+    -e "s/\"address\"[[:space:]]*:[[:space:]]*\"[^\"]*\"/\"address\": \"$host\"/" \
+    -e "s/\"port\"[[:space:]]*:[[:space:]]*[0-9]+/\"port\": $port/"
 }
 
 node_file() {
@@ -148,17 +263,23 @@ list_nodes() {
 }
 
 list_links() {
-  local file id name mode link found=0
+  local file id name mode public_link private_link found=0
   shopt -s nullglob
   for file in "$STATE_DIR"/*.conf; do
     found=1
     id="$(field "$file" NODE_ID)"
     name="$(decode "$(field "$file" DISPLAY_NAME_B64)")"
     mode="$(field "$file" MODE)"
-    link="$(decode "$(field "$file" SS_LINK_B64)")"
+    public_link="$(public_ss_link "$file")"
+    private_link="$(private_ss_link "$file")"
     echo "[$id] $name ($mode)"
-    echo "$link"
-    [[ "$mode" == "relay" ]] || echo "  注意：direct 链接仅在该 VPS/WireGuard 网络内可达。"
+    if [[ -n "$public_link" ]]; then
+      echo "  [公网 SS] $public_link"
+    else
+      echo "  [公网 SS] 未开放或旧配置未记录"
+    fi
+    echo "  [私网 SS] $private_link"
+    echo "  私网链接仅在已连接该 WireGuard 隧道的 VPS/Xray 中可达。"
     echo
   done
   if ((found == 0)) && [[ -f /etc/wireguard/wg-home.conf ]]; then
@@ -171,7 +292,7 @@ list_links() {
 }
 
 show_node() {
-  local file="$1" id name mode backend iface vps_wg_port home_wg_port prefix vps_ss_port home_ss_port endpoint link outbound
+  local file="$1" id name mode backend iface vps_wg_port home_wg_port prefix vps_ss_port home_ss_port public_endpoint private_endpoint public_link private_link public_outbound private_outbound
   id="$(field "$file" NODE_ID)"
   name="$(decode "$(field "$file" DISPLAY_NAME_B64)")"
   mode="$(field "$file" MODE)"
@@ -183,9 +304,12 @@ show_node() {
   prefix="$(field "$file" WG_PREFIX)"
   vps_ss_port="$(field_fallback "$file" VPS_SS_PORT SS_PORT)"
   home_ss_port="$(field_fallback "$file" HOME_SS_PORT SS_PORT)"
-  endpoint="$(field "$file" SS_ENDPOINT)"
-  link="$(decode "$(field "$file" SS_LINK_B64)")"
-  outbound="$(decode "$(field "$file" XRAY_OUTBOUND_B64)")"
+  public_endpoint="$(public_ss_endpoint "$file")"
+  private_endpoint="$(private_ss_endpoint "$file")"
+  public_link="$(public_ss_link "$file")"
+  private_link="$(private_ss_link "$file")"
+  public_outbound="$(outbound_for "$file" public)"
+  private_outbound="$(outbound_for "$file" private)"
 
   echo "线路名称：$name"
   echo "节点 ID：$id"
@@ -196,55 +320,74 @@ show_node() {
   echo "  家宽机本地 UDP：${home_wg_port:-未记录}"
   echo "SS 端口：VPS ${vps_ss_port:-未记录}，家宽机 ${home_ss_port:-未记录}"
   echo "状态：$(node_status "$iface")"
-  echo "SS 地址：$endpoint"
-  echo "SS 链接：$link"
-  if [[ "$mode" == "direct" ]]; then
-    echo "注意：该 SS 链接是隧道私网地址，仅供这台 VPS 的 Xray 使用。"
+  if [[ -n "$public_link" ]]; then
+    echo "公网 SS 地址：${public_endpoint:-未记录}"
+    echo "公网 SS 链接：$public_link"
+  else
+    echo "公网 SS：未开放或旧配置未记录"
   fi
+  echo "私网 SS 地址：${private_endpoint:-未记录}"
+  echo "私网 SS 链接：$private_link"
+  echo "注意：私网链接仅供已连接该 WireGuard 隧道的 VPS/Xray 使用。"
   echo
-  echo "Xray outbound："
-  echo "$outbound"
+  if [[ -n "$public_outbound" ]]; then
+    echo "公网 Xray outbound："
+    echo "$public_outbound"
+    echo
+  fi
+  echo "私网 Xray outbound："
+  if [[ -n "$private_outbound" ]]; then
+    echo "$private_outbound"
+  else
+    echo "该旧版登记节点没有保存 outbound JSON，请使用上面的私网 SS 链接导入。"
+  fi
 }
 
 export_node() {
-  local file="$1" format="${2:-all}" id name mode link outbound
+  local file="$1" format="${2:-all}" id name mode public_link private_link public_outbound private_outbound
   id="$(field "$file" NODE_ID)"
   name="$(decode "$(field "$file" DISPLAY_NAME_B64)")"
   mode="$(field "$file" MODE)"
-  link="$(decode "$(field "$file" SS_LINK_B64)")"
-  outbound="$(decode "$(field "$file" XRAY_OUTBOUND_B64)")"
+  public_link="$(public_ss_link "$file")"
+  private_link="$(private_ss_link "$file")"
+  public_outbound="$(outbound_for "$file" public)"
+  private_outbound="$(outbound_for "$file" private)"
   [[ "$format" == "ss" || "$format" == "xray" || "$format" == "routing" || "$format" == "all" ]] || die "导出格式必须是 ss、xray、routing 或 all"
 
   echo "线路：$name ($id)"
   echo "模式：$mode"
-  if [[ "$mode" == "direct" ]]; then
-    echo "注意：这是 WireGuard 私网节点，只能导入到已连接该隧道的优化 VPS/Xray。"
-  else
-    echo "说明：这是公网 relay 节点，可导入支持 ss:// 的图形化客户端或面板。"
-  fi
+  echo "说明：公网入口适合外部设备；私网入口适合已连接该隧道的线路机 Xray。"
   echo
 
   if [[ "$format" == "ss" || "$format" == "all" ]]; then
-    echo "[SS 导入链接]"
-    echo "$link"
+    echo "[公网 SS 导入链接]"
+    echo "${public_link:-未开放或旧配置未记录}"
+    echo
+    echo "[私网 SS 导入链接]"
+    echo "$private_link"
     echo
   fi
   if [[ "$format" == "xray" || "$format" == "all" ]]; then
-    echo "[Xray outbound JSON]"
-    if [[ -n "$outbound" ]]; then
-      echo "$outbound"
+    if [[ -n "$public_outbound" ]]; then
+      echo "[公网 Xray outbound JSON：home-$id-public]"
+      echo "$public_outbound"
+      echo
+    fi
+    echo "[私网 Xray outbound JSON：home-$id-private]"
+    if [[ -n "$private_outbound" ]]; then
+      echo "$private_outbound"
     else
-      echo "该旧版登记节点没有保存 outbound JSON，请使用上面的 SS 链接导入。"
+      echo "该旧版登记节点没有保存 outbound JSON，请使用上面的私网 SS 链接导入。"
     fi
     echo
   fi
   if [[ "$format" == "routing" || "$format" == "all" ]]; then
-    echo "[Xray routing 规则]"
+    echo "[Xray routing 规则：默认推荐私网入口]"
     cat <<EOF
 {
   "type": "field",
   "inboundTag": ["替换为你的入站tag"],
-  "outboundTag": "home-$id"
+  "outboundTag": "home-$id-private"
 }
 EOF
   fi
@@ -266,20 +409,25 @@ show_status() {
 }
 
 rename_node() {
-  local file="$1" new_name="$2" old_link new_link
+  local file="$1" new_name="$2" old_link new_link public_link private_link
   [[ "$(id -u)" == "0" ]] || die "修改线路名称需要 root，请使用 sudo"
   [[ -n "$new_name" ]] || die "新名称不能为空"
   old_link="$(decode "$(field "$file" SS_LINK_B64)")"
-  new_link="${old_link%%#*}#$(urlencode "$new_name")"
-  sed -i "s|^DISPLAY_NAME_B64=.*|DISPLAY_NAME_B64=$(encode "$new_name")|" "$file"
-  sed -i "s|^SS_LINK_B64=.*|SS_LINK_B64=$(encode "$new_link")|" "$file"
+  new_link="$(rewrite_ss_name "$old_link" "$new_name")"
+  public_link="$(rewrite_ss_name "$(public_ss_link "$file")" "$new_name-外网")"
+  private_link="$(rewrite_ss_name "$(private_ss_link "$file")" "$new_name-内网")"
+  set_field_value "$file" DISPLAY_NAME_B64 "$(encode "$new_name")"
+  set_field_value "$file" SS_LINK_B64 "$(encode "$new_link")"
+  set_field_value "$file" PUBLIC_SS_LINK_B64 "$(encode "$public_link")"
+  set_field_value "$file" PRIVATE_SS_LINK_B64 "$(encode "$private_link")"
   chmod 600 "$file"
   echo "已更新线路名称：$new_name"
-  echo "$new_link"
+  [[ -n "$public_link" ]] && echo "公网 SS：$public_link"
+  echo "私网 SS：$private_link"
 }
 
 register_node() {
-  local node_id name mode backend iface wg_port home_wg_port prefix endpoint endpoint_port vps_ss_port home_ss_port link outbound answer file
+  local node_id name mode backend iface wg_port home_wg_port prefix endpoint endpoint_port vps_ss_port home_ss_port link outbound answer file public_enabled public_endpoint private_endpoint public_link private_link
   [[ "$(id -u)" == "0" ]] || die "登记线路需要 root，请使用 sudo"
   read -r -p "节点 ID（1-8 位小写字母/数字/_）：" node_id
   [[ "$node_id" =~ ^[a-z0-9][a-z0-9_]{0,7}$ ]] || die "节点 ID 无效"
@@ -325,6 +473,17 @@ register_node() {
   link="${link%%#*}#$(urlencode "$name")"
   read -r -p "Xray outbound JSON（可留空）：" outbound
 
+  private_endpoint="$prefix.2:$home_ss_port"
+  private_link="$(rewrite_ss_name "$(rewrite_ss_endpoint "$link" "$private_endpoint")" "$name-内网")"
+  public_enabled="0"
+  public_endpoint=""
+  public_link=""
+  if [[ "$mode" == "relay" ]]; then
+    public_enabled="1"
+    public_endpoint="$endpoint"
+    public_link="$(rewrite_ss_name "$(rewrite_ss_endpoint "$link" "$public_endpoint")" "$name-外网")"
+  fi
+
   install -d -m 700 "$STATE_DIR"
   file="$STATE_DIR/$node_id.conf"
   if [[ -e "$file" ]]; then
@@ -335,6 +494,7 @@ register_node() {
 NODE_ID=$node_id
 DISPLAY_NAME_B64=$(encode "$name")
 MODE=$mode
+PUBLIC_SS_ENABLED=$public_enabled
 HOME_BACKEND=$backend
 WG_INTERFACE=$iface
 WG_PORT=$wg_port
@@ -347,10 +507,17 @@ HOME_SS_PORT=$home_ss_port
 SS_ENDPOINT=$endpoint
 SS_LINK_B64=$(encode "$link")
 XRAY_OUTBOUND_B64=$(encode "$outbound")
+PUBLIC_SS_ENDPOINT=$public_endpoint
+PRIVATE_SS_ENDPOINT=$private_endpoint
+PUBLIC_SS_LINK_B64=$(encode "$public_link")
+PRIVATE_SS_LINK_B64=$(encode "$private_link")
+PUBLIC_XRAY_OUTBOUND_B64=
+PRIVATE_XRAY_OUTBOUND_B64=
 EOF
   chmod 600 "$file"
   echo "已登记线路：$name ($node_id)"
-  echo "$link"
+  [[ -n "$public_link" ]] && echo "公网 SS：$public_link"
+  echo "私网 SS：$private_link"
 }
 
 menu() {

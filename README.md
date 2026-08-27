@@ -4,7 +4,7 @@
 
 支持全自动远程部署，也支持在两个 SSH 窗口中显示公钥、手动复制粘贴完成配对。
 
-每条线路使用独立节点、独立 SS 链接和独立 Xray outbound tag。脚本不会创建默认负载均衡，选择哪条家宽线路完全由用户自己的 Xray 路由决定。
+每条线路使用独立节点，并默认同时生成公网、WireGuard 私网两套 SS 链接和 Xray outbound tag。脚本不会创建默认负载均衡；使用公网还是私网入口、选择哪条家宽线路，都由用户自己的 Xray 路由决定。
 
 ## 一键运行
 
@@ -80,7 +80,7 @@ root 用户安装到 `/usr/local/bin/volwg`；OpenWrt root 安装到 `/usr/bin/v
       → 家宽机 SS2022
       → 家宽出口
 
-适合优化机只能编辑 Xray JSON、无法 SSH 的情况。脚本会在可 SSH 的公网 VPS 配置 DNAT/SNAT，并输出公网 SS2022 链接。
+适合优化机只能编辑 Xray JSON、无法 SSH 的情况。脚本会在可 SSH 的公网 VPS 配置 DNAT/SNAT，并同时输出公网与私网 SS2022 链接；relay 仅表示默认推荐公网入口。
 
 ### direct：优化 VPS 直接连接家宽
 
@@ -91,7 +91,18 @@ root 用户安装到 `/usr/local/bin/volwg`；OpenWrt root 安装到 `/usr/bin/v
       → 家宽机 SS2022
       → 家宽出口
 
-优化 VPS 必须拥有 root/SSH。该模式不需要公网 SS 端口转发，脚本会输出可加入优化机 Xray JSON 的 outbound。
+优化 VPS 必须拥有 root/SSH。脚本会输出可加入优化机 Xray JSON 的 WireGuard 私网 outbound，同时默认保留公网转发和公网链接；direct 仅表示默认推荐私网入口。若确定不需要公网访问，可使用 `--public-ss off` 关闭公网转发。
+
+## 公网与私网 SS 链接
+
+每次新部署默认生成两套入口，它们使用同一台家宽机上的 SS2022 服务、同一密钥和同一出口：
+
+- 公网 SS：`VPS公网地址:VPS公网SS端口`，经过 nftables DNAT 和 WireGuard 到达家宽机，可供其他 VPS 或公网设备使用。
+- 私网 SS：`WireGuard家宽地址:家宽SS端口`，不绕 VPS 公网 SS 端口，适合已经接入该 WireGuard 隧道的线路机 Xray。
+
+两条链接可以同时存在，用户按实际场景选择即可。公网入口默认开启；不希望暴露公网端口时，在向导中选择 `off`，或在非交互命令中加入：
+
+    --public-ss off
 
 ## 快速开始：引导式入口
 
@@ -120,7 +131,7 @@ root 用户安装到 `/usr/local/bin/volwg`；OpenWrt root 安装到 `/usr/bin/v
 
 ## 一台 VPS 连接多个家宽机
 
-每个家宽节点必须使用不同的节点 ID、VPS WireGuard 监听端口和 WireGuard 网段。多个 relay 节点还必须使用不同的 VPS 公网 SS 端口。VPS 与家宽机两端的 WireGuard、SS 端口均可分别设置，适合 NAT 端口映射或服务商限定端口的机器。
+每个家宽节点必须使用不同的节点 ID、VPS WireGuard 监听端口和 WireGuard 网段。多个开放公网 SS 的节点还必须使用不同的 VPS 公网 SS 端口。VPS 与家宽机两端的 WireGuard、SS 端口均可分别设置，适合 NAT 端口映射或服务商限定端口的机器。
 
 例如第一条家宽线路：
 
@@ -157,13 +168,13 @@ root 用户安装到 `/usr/local/bin/volwg`；OpenWrt root 安装到 `/usr/bin/v
     sudo volwg manager rename line1 "备用家宽线路"
     sudo volwg manager node line1
 
-`links` 会按自定义线路名称分别显示 SS 链接。relay 显示公网可用链接；direct 显示 WireGuard 私网链接和 Xray outbound，仅供对应 VPS 使用。
+`links` 会按自定义线路名称分别显示公网和 WireGuard 私网 SS 链接。私网链接仅供已连接对应隧道的 VPS/Xray 使用。
 
 `node` 专门用于导入图形化 Xray 客户端或面板，一次输出三种内容：
 
-- 标准 `ss://` 导入链接。
-- Xray outbound JSON。
-- 将指定入站指向该节点的 routing 规则。
+- 公网与私网标准 `ss://` 导入链接。
+- 公网与私网 Xray outbound JSON。
+- 将指定入站指向私网 outbound 的 routing 规则。
 
 也可以只输出需要的格式：
 
@@ -171,7 +182,7 @@ root 用户安装到 `/usr/local/bin/volwg`；OpenWrt root 安装到 `/usr/bin/v
     volwg manager node line1 xray
     volwg manager node line1 routing
 
-relay 节点的 `ss://` 链接可以从公网访问；direct 节点包含 WireGuard 私网地址，只能导入到已经连接对应隧道的优化 VPS/Xray，不能直接用于普通公网客户端。
+公网链接可以从公网访问；私网链接只能导入到已经连接对应 WireGuard 隧道的优化 VPS/Xray，不能直接用于普通公网客户端。relay/direct 只影响兼容 tag `home-节点ID` 默认指向哪一套入口，不限制两套链接同时存在。
 
 旧版本已经部署好的线路不会被自动覆盖。可以运行下面的命令，将旧 SS 链接粘贴登记到管理后台，并重新设置易于区分的名称：
 
@@ -247,7 +258,7 @@ SSH 可能短暂断开，重新连接后使用以下命令检查：
       --vps-public-host 198.51.100.20 \
       --home root@home-b.example.net \
       --vps-wg-port 51831 --home-wg-port 45001 \
-      --home-ss-port 32001 \
+      --vps-ss-port 31001 --home-ss-port 32001 \
       --home-backend ss-rust \
       --identity ~/.ssh/id_ed25519
 
@@ -266,23 +277,23 @@ SSH 可能短暂断开，重新连接后使用以下命令检查：
 - 家宽端隧道地址：10.88.0.2
 - VPS WireGuard 公网端口：51830/UDP
 - 家宽机 WireGuard 本地端口：51830/UDP
-- VPS 公网 SS 端口：31000/TCP+UDP（仅 relay）
+- VPS 公网 SS 端口：31000/TCP+UDP（默认开放，可关闭）
 - 家宽机 SS2022 服务端口：31000/TCP+UDP
 - SS2022 加密：2022-blake3-aes-128-gcm（16 字节密钥）
 - PersistentKeepalive：25 秒
 
-可通过 `--vps-wg-port`、`--home-wg-port`、`--vps-ss-port`、`--home-ss-port` 分别指定两端端口。兼容参数 `--wg-port` 和 `--ss-port` 会把两端设置成同一个值。脚本会检查已登记节点的 VPS 监听端口和网段冲突；同一节点 ID 默认禁止覆盖，确认需要更新时使用 `--replace`。
+可通过 `--vps-wg-port`、`--home-wg-port`、`--vps-ss-port`、`--home-ss-port` 分别指定两端端口。兼容参数 `--wg-port` 和 `--ss-port` 会把两端设置成同一个值。`--public-ss on|off` 控制是否创建公网 DNAT/SNAT，默认 `on`。脚本会检查已登记节点的 VPS 监听端口和网段冲突；同一节点 ID 默认禁止覆盖，确认需要更新时使用 `--replace`。
 
-relay 模式允许两端 SS 使用不同端口，例如公网访问 VPS `31000`，再 DNAT 到家宽机 WireGuard 地址的 `32000`。家宽端主动连接 VPS，因此家宽 WireGuard 本地端口也可以按 NAT 或服务商允许的端口范围单独指定。
+公网 SS 允许两端使用不同端口，例如公网访问 VPS `31000`，再 DNAT 到家宽机 WireGuard 地址的 `32000`。家宽端主动连接 VPS，因此家宽 WireGuard 本地端口也可以按 NAT 或服务商允许的端口范围单独指定。
 
 ## Xray 路由
 
-把脚本输出的 Shadowsocks outbound 加入优化机 outbounds，然后将需要落地家宽的入站指向它。每个节点的 tag 为 `home-节点ID`，脚本不会添加 balancer 或负载均衡规则：
+把脚本输出的 Shadowsocks outbound 加入优化机 outbounds，然后将需要落地家宽的入站指向它。公网 tag 为 `home-节点ID-public`，私网 tag 为 `home-节点ID-private`；兼容 tag `home-节点ID` 根据 relay/direct 指向推荐入口。脚本不会添加 balancer 或负载均衡规则：
 
     {
       "type": "field",
       "inboundTag": ["需要走家宽的入站 tag"],
-      "outboundTag": "home-line1"
+      "outboundTag": "home-line1-private"
     }
 
 脚本同时输出新版 Xray 和旧版 settings.servers 两种 Shadowsocks outbound 格式。

@@ -3,8 +3,8 @@ set -Eeuo pipefail
 
 # Debian/Ubuntu 公网 VPS + 家宽机一键部署。
 # 家宽端支持 OpenWrt/ImmortalWrt、Debian 12/13、Ubuntu。
-#   relay  - 公网 VPS 转发 SS 端口到家宽机，并输出公网 SS2022 链接
-#   direct - 优化 VPS 原生 WireGuard 直连家宽机，并输出 Xray SS outbound
+#   relay  - 推荐使用公网 SS 链接，同时也生成 WireGuard 私网链接
+#   direct - 推荐使用 WireGuard 私网链接，同时也可生成公网 SS 链接
 
 MODE=""
 VPS_TARGET=""
@@ -19,6 +19,7 @@ VPS_SS_PORT="31000"
 HOME_SS_PORT="31000"
 HOME_BACKEND="ss-rust"
 SS_RUST_VERSION="v1.25.0"
+PUBLIC_SS_ENABLED="1"
 WG_PREFIX="10.88.0"
 NODE_ID="home1"
 DISPLAY_NAME="家宽线路 1"
@@ -36,9 +37,9 @@ usage() {
     --home root@家宽机地址 [选项]
 
 必需参数：
-  --mode relay|direct       relay 输出公网 SS 链接；direct 输出私网 Xray outbound
+  --mode relay|direct       选择推荐入口；默认都生成公网和私网 SS 链接
   --vps USER@HOST          可 SSH/root 的 Debian 或 Ubuntu VPS
-  --vps-public-host HOST   WireGuard endpoint；relay 模式也是 SS 链接地址
+  --vps-public-host HOST   WireGuard endpoint，也是公网 SS 链接地址
   --home USER@HOST         可 SSH/root 的家宽机
                             支持 OpenWrt/ImmortalWrt、Debian 12/13、Ubuntu
 
@@ -52,8 +53,9 @@ usage() {
   --identity PATH           SSH 私钥路径；省略则使用 ssh-agent/~/.ssh/config
   --vps-wg-port PORT        VPS WireGuard 公网 UDP 端口，默认 51830
   --home-wg-port PORT       家宽机 WireGuard 本地 UDP 端口，默认 51830
-  --vps-ss-port PORT        relay 模式的 VPS 公网 SS 端口，默认 31000
+  --vps-ss-port PORT        VPS 公网 SS 端口，默认 31000
   --home-ss-port PORT       家宽机 SS2022 服务端口，默认 31000
+  --public-ss on|off        是否开放公网 SS，默认 on
   --home-backend TYPE       家宽服务端：ss-rust（默认）或 xray
   --wg-port PORT            兼容选项：同时设置两端 WireGuard 端口
   --ss-port PORT            兼容选项：同时设置两端 SS 端口
@@ -79,7 +81,7 @@ usage() {
     --vps root@198.51.100.20 --vps-public-host 198.51.100.20 \
     --home root@home-b.example.net --home-ssh-port 1090 \
     --vps-wg-port 51831 --home-wg-port 45001 \
-    --home-ss-port 32001 \
+    --vps-ss-port 31001 --home-ss-port 32001 \
     --home-backend ss-rust \
     --identity ~/.ssh/id_ed25519 --yes
 
@@ -108,12 +110,12 @@ prompt_with_default() {
 }
 
 guided_full_deploy() {
-  local mode_choice backend_choice identity_answer default_public_host
+  local mode_choice backend_choice public_ss_answer identity_answer default_public_host
 
   echo
   echo "请选择部署结构："
-  echo "  1) relay：可 SSH 公网 VPS 中转，输出公网 SS2022 链接"
-  echo "  2) direct：可 SSH 优化 VPS 直连家宽，输出 Xray outbound"
+  echo "  1) relay：推荐公网 SS 入口（同时生成私网入口）"
+  echo "  2) direct：推荐 WireGuard 私网入口（同时生成公网入口）"
   read -r -p "输入 1 或 2：" mode_choice
   case "$mode_choice" in
     1) MODE="relay" ;;
@@ -136,11 +138,13 @@ guided_full_deploy() {
   VPS_WG_PORT="$(prompt_with_default "VPS WireGuard 公网 UDP 端口" "$VPS_WG_PORT")"
   HOME_WG_PORT="$(prompt_with_default "家宽机 WireGuard 本地 UDP 端口" "$HOME_WG_PORT")"
   HOME_SS_PORT="$(prompt_with_default "家宽机 SS2022 TCP/UDP 端口" "$HOME_SS_PORT")"
-  if [[ "$MODE" == "relay" ]]; then
-    VPS_SS_PORT="$(prompt_with_default "VPS 公网 SS TCP/UDP 端口" "$VPS_SS_PORT")"
-  else
-    VPS_SS_PORT="$HOME_SS_PORT"
-  fi
+  VPS_SS_PORT="$(prompt_with_default "VPS 公网 SS TCP/UDP 端口" "$VPS_SS_PORT")"
+  public_ss_answer="$(prompt_with_default "生成并开放公网 SS（on/off）" "on")"
+  case "$public_ss_answer" in
+    on) PUBLIC_SS_ENABLED="1" ;;
+    off) PUBLIC_SS_ENABLED="0" ;;
+    *) die "公网 SS 开关必须是 on 或 off" ;;
+  esac
   echo
   echo "请选择家宽机 SS2022 服务端后端："
   echo "  1) ss-rust ssserver（推荐，轻量）"
@@ -207,6 +211,14 @@ while (($#)); do
     --home-wg-port) HOME_WG_PORT="${2:-}"; shift 2 ;;
     --vps-ss-port) VPS_SS_PORT="${2:-}"; shift 2 ;;
     --home-ss-port) HOME_SS_PORT="${2:-}"; shift 2 ;;
+    --public-ss)
+      case "${2:-}" in
+        on) PUBLIC_SS_ENABLED="1" ;;
+        off) PUBLIC_SS_ENABLED="0" ;;
+        *) die "--public-ss 必须是 on 或 off" ;;
+      esac
+      shift 2
+      ;;
     --home-backend) HOME_BACKEND="${2:-}"; shift 2 ;;
     --wg-port) VPS_WG_PORT="${2:-}"; HOME_WG_PORT="${2:-}"; shift 2 ;;
     --ss-port) VPS_SS_PORT="${2:-}"; HOME_SS_PORT="${2:-}"; shift 2 ;;
@@ -225,6 +237,7 @@ fi
 
 [[ "$MODE" == "relay" || "$MODE" == "direct" ]] || die "--mode 必须是 relay 或 direct"
 [[ "$HOME_BACKEND" == "ss-rust" || "$HOME_BACKEND" == "xray" ]] || die "--home-backend 必须是 ss-rust 或 xray"
+[[ "$PUBLIC_SS_ENABLED" == "0" || "$PUBLIC_SS_ENABLED" == "1" ]] || die "公网 SS 开关无效"
 [[ "$NODE_ID" =~ ^[a-z0-9][a-z0-9_]{0,7}$ ]] || die "--node 必须是 1-8 位小写字母、数字或下划线"
 [[ -n "$DISPLAY_NAME" ]] || die "--name 不能为空"
 [[ -n "$VPS_TARGET" ]] || die "缺少 --vps"
@@ -350,8 +363,10 @@ echo "WireGuard：${WG_IFACE}，${WG_PREFIX}.1 ↔ ${WG_PREFIX}.2"
 echo "  VPS 公网 UDP：$VPS_WG_PORT"
 echo "  家宽机本地 UDP：$HOME_WG_PORT"
 echo "家宽 SS2022：$WG_PREFIX.2:$HOME_SS_PORT"
-if [[ "$MODE" == "relay" ]]; then
+if [[ "$PUBLIC_SS_ENABLED" == "1" ]]; then
   echo "VPS 公网 SS：$VPS_PUBLIC_HOST:$VPS_SS_PORT/TCP+UDP"
+else
+  echo "VPS 公网 SS：已关闭"
 fi
 echo
 echo "脚本会自动安装 WireGuard 和所选 SS2022 服务端。"
@@ -376,9 +391,9 @@ if [[ "$REPLACE_NODE" != "1" ]] && ssh_vps "test -e '/etc/wireguard/$WG_IFACE.co
   die "节点 $NODE_ID 已存在；换一个 --node，或确认覆盖后添加 --replace"
 fi
 
-# 不同接口必须使用不同 VPS WG 监听端口和隧道网段；relay 的 VPS 公网 SS 端口也必须唯一。
+# 不同接口必须使用不同 VPS WG 监听端口和隧道网段；已开放的 VPS 公网 SS 端口也必须唯一。
 # 读取旧节点时回退到 WG_PORT/SS_PORT，保持向后兼容。
-collision="$(ssh_vps "set -eu; for f in /etc/wg-home-exit/nodes/*.conf; do test -f \"\$f\" || continue; test \"\$f\" = '/etc/wg-home-exit/nodes/$NODE_ID.conf' && continue; FILE_NODE=\$(sed -n 's/^NODE_ID=//p' \"\$f\" | head -n1); FILE_VPS_WG_PORT=\$(sed -n 's/^VPS_WG_PORT=//p' \"\$f\" | head -n1); test -n \"\$FILE_VPS_WG_PORT\" || FILE_VPS_WG_PORT=\$(sed -n 's/^WG_PORT=//p' \"\$f\" | head -n1); FILE_WG_PREFIX=\$(sed -n 's/^WG_PREFIX=//p' \"\$f\" | head -n1); FILE_MODE=\$(sed -n 's/^MODE=//p' \"\$f\" | head -n1); FILE_VPS_SS_PORT=\$(sed -n 's/^VPS_SS_PORT=//p' \"\$f\" | head -n1); test -n \"\$FILE_VPS_SS_PORT\" || FILE_VPS_SS_PORT=\$(sed -n 's/^SS_PORT=//p' \"\$f\" | head -n1); if test \"\$FILE_VPS_WG_PORT\" = '$VPS_WG_PORT'; then echo VPS_WG_PORT:\$FILE_NODE; fi; if test \"\$FILE_WG_PREFIX\" = '$WG_PREFIX'; then echo WG_PREFIX:\$FILE_NODE; fi; if test '$MODE' = relay && test \"\$FILE_MODE\" = relay && test \"\$FILE_VPS_SS_PORT\" = '$VPS_SS_PORT'; then echo VPS_SS_PORT:\$FILE_NODE; fi; done" 2>/dev/null || true)"
+collision="$(ssh_vps "set -eu; for f in /etc/wg-home-exit/nodes/*.conf; do test -f \"\$f\" || continue; test \"\$f\" = '/etc/wg-home-exit/nodes/$NODE_ID.conf' && continue; FILE_NODE=\$(sed -n 's/^NODE_ID=//p' \"\$f\" | head -n1); FILE_VPS_WG_PORT=\$(sed -n 's/^VPS_WG_PORT=//p' \"\$f\" | head -n1); test -n \"\$FILE_VPS_WG_PORT\" || FILE_VPS_WG_PORT=\$(sed -n 's/^WG_PORT=//p' \"\$f\" | head -n1); FILE_WG_PREFIX=\$(sed -n 's/^WG_PREFIX=//p' \"\$f\" | head -n1); FILE_MODE=\$(sed -n 's/^MODE=//p' \"\$f\" | head -n1); FILE_PUBLIC_SS=\$(sed -n 's/^PUBLIC_SS_ENABLED=//p' \"\$f\" | head -n1); test -n \"\$FILE_PUBLIC_SS\" || { test \"\$FILE_MODE\" = relay && FILE_PUBLIC_SS=1 || FILE_PUBLIC_SS=0; }; FILE_VPS_SS_PORT=\$(sed -n 's/^VPS_SS_PORT=//p' \"\$f\" | head -n1); test -n \"\$FILE_VPS_SS_PORT\" || FILE_VPS_SS_PORT=\$(sed -n 's/^SS_PORT=//p' \"\$f\" | head -n1); if test \"\$FILE_VPS_WG_PORT\" = '$VPS_WG_PORT'; then echo VPS_WG_PORT:\$FILE_NODE; fi; if test \"\$FILE_WG_PREFIX\" = '$WG_PREFIX'; then echo WG_PREFIX:\$FILE_NODE; fi; if test '$PUBLIC_SS_ENABLED' = 1 && test \"\$FILE_PUBLIC_SS\" = 1 && test \"\$FILE_VPS_SS_PORT\" = '$VPS_SS_PORT'; then echo VPS_SS_PORT:\$FILE_NODE; fi; done" 2>/dev/null || true)"
 [[ -z "$collision" ]] || die "端口或网段与已有节点冲突：$collision"
 
 cat >"$TMP_DIR/install-ssserver" <<'SSINSTALL'
@@ -494,7 +509,7 @@ if [[ "$REPLACE_NODE" != "1" ]]; then
   [[ -z "$used_wg_iface" ]] || die "VPS WireGuard UDP $VPS_WG_PORT 已被接口 $used_wg_iface 使用，请更换 --vps-wg-port"
   used_home_wg_iface="$(ssh_openwrt "for iface in \$(wg show interfaces 2>/dev/null); do test \"\$iface\" = '$WG_IFACE' && continue; test \"\$(wg show \"\$iface\" listen-port 2>/dev/null)\" = '$HOME_WG_PORT' && echo \"\$iface\"; done" || true)"
   [[ -z "$used_home_wg_iface" ]] || die "家宽机 WireGuard UDP $HOME_WG_PORT 已被接口 $used_home_wg_iface 使用，请更换 --home-wg-port"
-  if [[ "$MODE" == "relay" ]] && ssh_vps "nft -a list ruleset 2>/dev/null | grep -Eq '(tcp|udp) dport $VPS_SS_PORT .*dnat'"; then
+  if [[ "$PUBLIC_SS_ENABLED" == "1" ]] && ssh_vps "nft -a list ruleset 2>/dev/null | grep -Eq '(tcp|udp) dport $VPS_SS_PORT .*dnat'"; then
     die "VPS 公网 SS 端口 $VPS_SS_PORT 已存在 DNAT 规则，请更换 --vps-ss-port"
   fi
 fi
@@ -811,7 +826,7 @@ systemctl restart '$HOME_SERVICE.service'"
 fi
 
 echo "[6/8] 配置数据路径"
-if [[ "$MODE" == "relay" ]]; then
+if [[ "$PUBLIC_SS_ENABLED" == "1" ]]; then
   vps_iface="$(ssh_vps 'ip route show default' | awk 'NR==1 {print $5}')"
   [[ -n "$vps_iface" ]] || die "无法识别 VPS 默认公网接口"
 
@@ -865,7 +880,7 @@ EOF
   ssh_vps "set -eu; printf 'net.ipv4.ip_forward=1\n' > /etc/sysctl.d/99-wg-home.conf; sysctl -p /etc/sysctl.d/99-wg-home.conf >/dev/null; install -m 700 '/tmp/$NFT_SERVICE' '/usr/local/sbin/$NFT_SERVICE'; install -m 644 '/tmp/$NFT_SERVICE.service' '/etc/systemd/system/$NFT_SERVICE.service'; rm -f '/tmp/$NFT_SERVICE' '/tmp/$NFT_SERVICE.service'; systemctl daemon-reload; systemctl enable '$NFT_SERVICE.service' >/dev/null; systemctl restart '$NFT_SERVICE.service'"
 else
   ssh_vps "systemctl disable --now '$NFT_SERVICE.service' >/dev/null 2>&1 || true; nft list table ip '$WG_IFACE' >/dev/null 2>&1 && nft delete table ip '$WG_IFACE' || true"
-  echo "direct 节点不创建公网转发规则，也不会修改其他 relay 节点。"
+  echo "公网 SS 已关闭；不创建公网转发规则，也不会修改其他节点。"
 fi
 
 echo "[7/8] 等待握手并验证服务"
@@ -880,17 +895,26 @@ fi
 
 echo "[8/8] 登记线路并完成"
 
-if [[ "$MODE" == "relay" ]]; then
+ss_userinfo="$(base64url_value "2022-blake3-aes-128-gcm:$ss_password")"
+public_ss_endpoint="$VPS_PUBLIC_HOST:$VPS_SS_PORT"
+private_ss_endpoint="$WG_PREFIX.2:$HOME_SS_PORT"
+public_ss_link=""
+if [[ "$PUBLIC_SS_ENABLED" == "1" ]]; then
+  public_ss_link="ss://$ss_userinfo@$public_ss_endpoint#$(urlencode "$DISPLAY_NAME-外网")"
+fi
+private_ss_link="ss://$ss_userinfo@$private_ss_endpoint#$(urlencode "$DISPLAY_NAME-内网")"
+
+if [[ "$MODE" == "relay" && "$PUBLIC_SS_ENABLED" == "1" ]]; then
   ss_host="$VPS_PUBLIC_HOST"
   ss_link_port="$VPS_SS_PORT"
+  ss_endpoint="$public_ss_endpoint"
+  ss_link="$public_ss_link"
 else
   ss_host="$WG_PREFIX.2"
   ss_link_port="$HOME_SS_PORT"
+  ss_endpoint="$private_ss_endpoint"
+  ss_link="$private_ss_link"
 fi
-ss_endpoint="$ss_host:$ss_link_port"
-ss_userinfo="$(base64url_value "2022-blake3-aes-128-gcm:$ss_password")"
-encoded_name="$(urlencode "$DISPLAY_NAME")"
-ss_link="ss://$ss_userinfo@$ss_endpoint#$encoded_name"
 
 cat >"$TMP_DIR/xray-outbound.json" <<EOF
 {
@@ -905,10 +929,41 @@ cat >"$TMP_DIR/xray-outbound.json" <<EOF
 }
 EOF
 
+cat >"$TMP_DIR/xray-outbound-private.json" <<EOF
+{
+  "tag": "home-$NODE_ID-private",
+  "protocol": "shadowsocks",
+  "settings": {
+    "address": "$WG_PREFIX.2",
+    "port": $HOME_SS_PORT,
+    "method": "2022-blake3-aes-128-gcm",
+    "password": "$ss_password"
+  }
+}
+EOF
+
+if [[ "$PUBLIC_SS_ENABLED" == "1" ]]; then
+  cat >"$TMP_DIR/xray-outbound-public.json" <<EOF
+{
+  "tag": "home-$NODE_ID-public",
+  "protocol": "shadowsocks",
+  "settings": {
+    "address": "$VPS_PUBLIC_HOST",
+    "port": $VPS_SS_PORT,
+    "method": "2022-blake3-aes-128-gcm",
+    "password": "$ss_password"
+  }
+}
+EOF
+else
+  : >"$TMP_DIR/xray-outbound-public.json"
+fi
+
 cat >"$TMP_DIR/node.conf" <<EOF
 NODE_ID=$NODE_ID
 DISPLAY_NAME_B64=$(base64_value "$DISPLAY_NAME")
 MODE=$MODE
+PUBLIC_SS_ENABLED=$PUBLIC_SS_ENABLED
 HOME_BACKEND=$HOME_BACKEND
 WG_INTERFACE=$WG_IFACE
 WG_PORT=$VPS_WG_PORT
@@ -921,6 +976,12 @@ HOME_SS_PORT=$HOME_SS_PORT
 SS_ENDPOINT=$ss_endpoint
 SS_LINK_B64=$(base64_value "$ss_link")
 XRAY_OUTBOUND_B64=$(base64_value "$(cat "$TMP_DIR/xray-outbound.json")")
+PUBLIC_SS_ENDPOINT=$(if [[ "$PUBLIC_SS_ENABLED" == "1" ]]; then printf '%s' "$public_ss_endpoint"; fi)
+PRIVATE_SS_ENDPOINT=$private_ss_endpoint
+PUBLIC_SS_LINK_B64=$(base64_value "$public_ss_link")
+PRIVATE_SS_LINK_B64=$(base64_value "$private_ss_link")
+PUBLIC_XRAY_OUTBOUND_B64=$(base64_value "$(cat "$TMP_DIR/xray-outbound-public.json")")
+PRIVATE_XRAY_OUTBOUND_B64=$(base64_value "$(cat "$TMP_DIR/xray-outbound-private.json")")
 EOF
 chmod 600 "$TMP_DIR/node.conf"
 
@@ -938,17 +999,30 @@ echo "节点 ID：$NODE_ID"
 echo "家宽服务端：$HOME_BACKEND"
 echo "加密方式：2022-blake3-aes-128-gcm"
 echo "密码：$ss_password"
-echo "SS 地址：$ss_endpoint"
-echo "SS2022 链接："
-echo "$ss_link"
-if [[ "$MODE" == "direct" ]]; then
-  echo "注意：direct 链接使用 WireGuard 私网地址，只能在该 VPS/WireGuard 网络内使用。"
+if [[ "$PUBLIC_SS_ENABLED" == "1" ]]; then
+  echo "公网 SS 地址：$public_ss_endpoint"
+  echo "公网 SS2022 链接："
+  echo "$public_ss_link"
+else
+  echo "公网 SS：已关闭（可重新部署时使用 --public-ss on 开启）"
 fi
+echo "私网 SS 地址：$private_ss_endpoint"
+echo "私网 SS2022 链接："
+echo "$private_ss_link"
+echo "注意：私网链接仅供已连接该 WireGuard 隧道的 VPS/Xray 使用。"
 echo
-echo "Xray outbound（每条线路独立 tag，不含负载均衡）："
+if [[ "$PUBLIC_SS_ENABLED" == "1" ]]; then
+  echo "公网 Xray outbound（tag：home-$NODE_ID-public）："
+  cat "$TMP_DIR/xray-outbound-public.json"
+  echo
+fi
+echo "私网 Xray outbound（tag：home-$NODE_ID-private，推荐线路机使用）："
+cat "$TMP_DIR/xray-outbound-private.json"
+echo
+echo "兼容输出：默认入口 Xray outbound（tag：home-$NODE_ID）："
 cat "$TMP_DIR/xray-outbound.json"
 echo
-echo "旧版 Xray 若提示 0 Shadowsocks server configured，请改用 settings.servers："
+echo "旧版 Xray 若提示 0 Shadowsocks server configured，默认入口改用 settings.servers："
 cat <<EOF
 {
   "tag": "home-$NODE_ID",
@@ -971,7 +1045,7 @@ echo "  volwg manager list"
 echo "  volwg manager links"
 echo "  volwg manager show $NODE_ID"
 echo "  volwg manager node $NODE_ID"
-if [[ "$MODE" == "relay" ]]; then
+if [[ "$PUBLIC_SS_ENABLED" == "1" ]]; then
   echo
   echo "注意：确认 VPS 防火墙允许 $VPS_WG_PORT/UDP 和 $VPS_SS_PORT/TCP+UDP。"
 fi
