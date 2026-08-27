@@ -3,7 +3,8 @@ set -Eeuo pipefail
 
 ROLE=""
 WG_PREFIX="10.88.0"
-WG_PORT="51830"
+VPS_WG_PORT="51830"
+HOME_WG_PORT="51830"
 VPS_ENDPOINT=""
 
 usage() {
@@ -23,7 +24,9 @@ usage() {
 选项：
   --role vps|home
   --wg-prefix A.B.C       默认 10.88.0
-  --wg-port PORT          默认 51830
+  --vps-wg-port PORT      VPS 公网 UDP 端口，默认 51830
+  --home-wg-port PORT     家宽机本地 UDP 端口，默认 51830
+  --wg-port PORT          兼容选项：同时设置两端端口
   --endpoint HOST         home 角色使用的 VPS 公网 IP/域名
   -h, --help
 EOF
@@ -48,7 +51,9 @@ while (($#)); do
   case "$1" in
     --role) ROLE="${2:-}"; shift 2 ;;
     --wg-prefix) WG_PREFIX="${2:-}"; shift 2 ;;
-    --wg-port) WG_PORT="${2:-}"; shift 2 ;;
+    --vps-wg-port) VPS_WG_PORT="${2:-}"; shift 2 ;;
+    --home-wg-port) HOME_WG_PORT="${2:-}"; shift 2 ;;
+    --wg-port) VPS_WG_PORT="${2:-}"; HOME_WG_PORT="${2:-}"; shift 2 ;;
     --endpoint) VPS_ENDPOINT="${2:-}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) die "未知参数：$1" ;;
@@ -70,8 +75,11 @@ fi
 [[ "$ROLE" == "vps" || "$ROLE" == "home" ]] || die "--role 必须是 vps 或 home"
 [[ "$(id -u)" == "0" ]] || die "请使用 root 或 sudo 运行"
 [[ "$WG_PREFIX" =~ ^([0-9]{1,3}\.){2}[0-9]{1,3}$ ]] || die "网段前缀格式无效"
-if ! [[ "$WG_PORT" =~ ^[0-9]+$ ]] || ((WG_PORT < 1 || WG_PORT > 65535)); then
-  die "WireGuard 端口无效"
+if ! [[ "$VPS_WG_PORT" =~ ^[0-9]+$ ]] || ((VPS_WG_PORT < 1 || VPS_WG_PORT > 65535)); then
+  die "VPS WireGuard 端口无效"
+fi
+if ! [[ "$HOME_WG_PORT" =~ ^[0-9]+$ ]] || ((HOME_WG_PORT < 1 || HOME_WG_PORT > 65535)); then
+  die "家宽机 WireGuard 端口无效"
 fi
 
 if command -v uci >/dev/null 2>&1 && command -v opkg >/dev/null 2>&1; then
@@ -139,7 +147,15 @@ fi
 valid_wg_key "$peer_public_key" || die "粘贴的 WireGuard 公钥格式无效"
 
 WG_PREFIX="$(prompt_default "WireGuard 网段前缀" "$WG_PREFIX")"
-WG_PORT="$(prompt_default "VPS WireGuard UDP 端口" "$WG_PORT")"
+VPS_WG_PORT="$(prompt_default "VPS WireGuard 公网 UDP 端口" "$VPS_WG_PORT")"
+HOME_WG_PORT="$(prompt_default "家宽机 WireGuard 本地 UDP 端口" "$HOME_WG_PORT")"
+[[ "$WG_PREFIX" =~ ^([0-9]{1,3}\.){2}[0-9]{1,3}$ ]] || die "网段前缀格式无效"
+if ! [[ "$VPS_WG_PORT" =~ ^[0-9]+$ ]] || ((VPS_WG_PORT < 1 || VPS_WG_PORT > 65535)); then
+  die "VPS WireGuard 端口无效"
+fi
+if ! [[ "$HOME_WG_PORT" =~ ^[0-9]+$ ]] || ((HOME_WG_PORT < 1 || HOME_WG_PORT > 65535)); then
+  die "家宽机 WireGuard 端口无效"
+fi
 
 if [[ "$ROLE" == "vps" ]]; then
   echo
@@ -151,7 +167,7 @@ if [[ "$ROLE" == "vps" ]]; then
   cat >/etc/wireguard/wg-home.conf <<EOF
 [Interface]
 Address = $WG_PREFIX.1/24
-ListenPort = $WG_PORT
+ListenPort = $VPS_WG_PORT
 PrivateKey = $private_key
 
 [Peer]
@@ -164,7 +180,7 @@ EOF
 
   echo
   echo "[4/4] VPS 端完成"
-  echo "请确认云防火墙和系统防火墙允许：$WG_PORT/UDP"
+  echo "请确认云防火墙和系统防火墙允许：$VPS_WG_PORT/UDP"
   echo "等待家宽端完成后测试：ping $WG_PREFIX.2"
   echo
   wg show wg-home
@@ -187,10 +203,11 @@ else
     uci set network.wghome.proto='wireguard'
     uci set network.wghome.private_key="$private_key"
     uci add_list network.wghome.addresses="$WG_PREFIX.2/24"
+    uci set network.wghome.listen_port="$HOME_WG_PORT"
     uci set network.wghome_vps=wireguard_wghome
     uci set network.wghome_vps.public_key="$peer_public_key"
     uci set network.wghome_vps.endpoint_host="$VPS_ENDPOINT"
-    uci set network.wghome_vps.endpoint_port="$WG_PORT"
+    uci set network.wghome_vps.endpoint_port="$VPS_WG_PORT"
     uci set network.wghome_vps.persistent_keepalive='25'
     uci set network.wghome_vps.route_allowed_ips='1'
     uci add_list network.wghome_vps.allowed_ips="$WG_PREFIX.1/32"
@@ -226,11 +243,12 @@ else
     cat >/etc/wireguard/wg-home.conf <<EOF
 [Interface]
 Address = $WG_PREFIX.2/24
+ListenPort = $HOME_WG_PORT
 PrivateKey = $private_key
 
 [Peer]
 PublicKey = $peer_public_key
-Endpoint = $VPS_ENDPOINT:$WG_PORT
+Endpoint = $VPS_ENDPOINT:$VPS_WG_PORT
 AllowedIPs = $WG_PREFIX.1/32
 PersistentKeepalive = 25
 EOF

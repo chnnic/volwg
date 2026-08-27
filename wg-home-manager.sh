@@ -47,6 +47,13 @@ field() {
   sed -n "s/^${key}=//p" "$file" | head -n 1
 }
 
+field_fallback() {
+  local file="$1" primary="$2" legacy="$3" value
+  value="$(field "$file" "$primary")"
+  [[ -n "$value" ]] || value="$(field "$file" "$legacy")"
+  printf '%s' "$value"
+}
+
 decode() {
   local value="$1"
   [[ -n "$value" ]] || return 0
@@ -162,13 +169,16 @@ list_links() {
 }
 
 show_node() {
-  local file="$1" id name mode iface wg_port prefix endpoint link outbound
+  local file="$1" id name mode iface vps_wg_port home_wg_port prefix vps_ss_port home_ss_port endpoint link outbound
   id="$(field "$file" NODE_ID)"
   name="$(decode "$(field "$file" DISPLAY_NAME_B64)")"
   mode="$(field "$file" MODE)"
   iface="$(field "$file" WG_INTERFACE)"
-  wg_port="$(field "$file" WG_PORT)"
+  vps_wg_port="$(field_fallback "$file" VPS_WG_PORT WG_PORT)"
+  home_wg_port="$(field_fallback "$file" HOME_WG_PORT WG_PORT)"
   prefix="$(field "$file" WG_PREFIX)"
+  vps_ss_port="$(field_fallback "$file" VPS_SS_PORT SS_PORT)"
+  home_ss_port="$(field_fallback "$file" HOME_SS_PORT SS_PORT)"
   endpoint="$(field "$file" SS_ENDPOINT)"
   link="$(decode "$(field "$file" SS_LINK_B64)")"
   outbound="$(decode "$(field "$file" XRAY_OUTBOUND_B64)")"
@@ -176,7 +186,10 @@ show_node() {
   echo "线路名称：$name"
   echo "节点 ID：$id"
   echo "模式：$mode"
-  echo "WireGuard：${iface}，UDP ${wg_port}，${prefix}.1 ↔ ${prefix}.2"
+  echo "WireGuard：${iface}，${prefix}.1 ↔ ${prefix}.2"
+  echo "  VPS 公网 UDP：${vps_wg_port:-未记录}"
+  echo "  家宽机本地 UDP：${home_wg_port:-未记录}"
+  echo "SS 端口：VPS ${vps_ss_port:-未记录}，家宽机 ${home_ss_port:-未记录}"
   echo "状态：$(node_status "$iface")"
   echo "SS 地址：$endpoint"
   echo "SS 链接：$link"
@@ -261,7 +274,7 @@ rename_node() {
 }
 
 register_node() {
-  local node_id name mode iface wg_port prefix endpoint link outbound answer file
+  local node_id name mode iface wg_port home_wg_port prefix endpoint endpoint_port vps_ss_port home_ss_port link outbound answer file
   [[ "$(id -u)" == "0" ]] || die "登记线路需要 root，请使用 sudo"
   read -r -p "节点 ID（1-8 位小写字母/数字/_）：" node_id
   [[ "$node_id" =~ ^[a-z0-9][a-z0-9_]{0,7}$ ]] || die "节点 ID 无效"
@@ -278,11 +291,27 @@ register_node() {
   if ! [[ "$wg_port" =~ ^[0-9]+$ ]] || ((wg_port < 1 || wg_port > 65535)); then
     die "WireGuard 端口无效"
   fi
+  read -r -p "家宽机 WireGuard 本地 UDP 端口 [$wg_port]：" home_wg_port
+  home_wg_port="${home_wg_port:-$wg_port}"
+  if ! [[ "$home_wg_port" =~ ^[0-9]+$ ]] || ((home_wg_port < 1 || home_wg_port > 65535)); then
+    die "家宽机 WireGuard 端口无效"
+  fi
   read -r -p "WireGuard 网段前缀 [10.88.0]：" prefix
   prefix="${prefix:-10.88.0}"
   [[ "$prefix" =~ ^([0-9]{1,3}\.){2}[0-9]{1,3}$ ]] || die "WireGuard 网段前缀无效"
   read -r -p "SS 地址（例如 203.0.113.10:31000）：" endpoint
   [[ -n "$endpoint" ]] || die "SS 地址不能为空"
+  endpoint_port="${endpoint##*:}"
+  read -r -p "VPS 公网 SS 端口 [$endpoint_port]：" vps_ss_port
+  vps_ss_port="${vps_ss_port:-$endpoint_port}"
+  read -r -p "家宽机 SS 服务端口 [$endpoint_port]：" home_ss_port
+  home_ss_port="${home_ss_port:-$endpoint_port}"
+  if ! [[ "$vps_ss_port" =~ ^[0-9]+$ ]] || ((vps_ss_port < 1 || vps_ss_port > 65535)); then
+    die "VPS SS 端口无效"
+  fi
+  if ! [[ "$home_ss_port" =~ ^[0-9]+$ ]] || ((home_ss_port < 1 || home_ss_port > 65535)); then
+    die "家宽机 SS 端口无效"
+  fi
   read -r -p "粘贴现有 SS 链接：" link
   [[ "$link" == ss://* ]] || die "SS 链接无效"
   link="${link%%#*}#$(urlencode "$name")"
@@ -300,8 +329,12 @@ DISPLAY_NAME_B64=$(encode "$name")
 MODE=$mode
 WG_INTERFACE=$iface
 WG_PORT=$wg_port
+VPS_WG_PORT=$wg_port
+HOME_WG_PORT=$home_wg_port
 WG_PREFIX=$prefix
-SS_PORT=${endpoint##*:}
+SS_PORT=$endpoint_port
+VPS_SS_PORT=$vps_ss_port
+HOME_SS_PORT=$home_ss_port
 SS_ENDPOINT=$endpoint
 SS_LINK_B64=$(encode "$link")
 XRAY_OUTBOUND_B64=$(encode "$outbound")

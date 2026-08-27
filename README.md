@@ -106,23 +106,27 @@ root 用户安装到 `/usr/local/bin/volwg`；OpenWrt root 安装到 `/usr/bin/v
 
 ## 一台 VPS 连接多个家宽机
 
-每个家宽节点必须使用不同的节点 ID、WireGuard 端口和 WireGuard 网段。多个 relay 节点还必须使用不同的公网 SS 端口。
+每个家宽节点必须使用不同的节点 ID、VPS WireGuard 监听端口和 WireGuard 网段。多个 relay 节点还必须使用不同的 VPS 公网 SS 端口。VPS 与家宽机两端的 WireGuard、SS 端口均可分别设置，适合 NAT 端口映射或服务商限定端口的机器。
 
-例如第一条印尼雅加达线路：
-
-    volwg deploy --mode relay \
-      --node jkt1 --name "印尼雅加达家宽" \
-      --vps root@203.0.113.10 --vps-public-host 203.0.113.10 \
-      --home root@home-jkt.example.com \
-      --wg-port 51830 --wg-prefix 10.88.1 --ss-port 31001
-
-第二条印尼泗水线路：
+例如第一条家宽线路：
 
     volwg deploy --mode relay \
-      --node sby1 --name "印尼泗水家宽" \
+      --node line1 --name "家宽线路 A" \
       --vps root@203.0.113.10 --vps-public-host 203.0.113.10 \
-      --home root@home-sby.example.com \
-      --wg-port 51831 --wg-prefix 10.88.2 --ss-port 31002
+      --home root@home-a.example.net \
+      --vps-wg-port 51830 --home-wg-port 45000 \
+      --vps-ss-port 31001 --home-ss-port 32001 \
+      --wg-prefix 10.88.1
+
+第二条家宽线路：
+
+    volwg deploy --mode relay \
+      --node line2 --name "家宽线路 B" \
+      --vps root@203.0.113.10 --vps-public-host 203.0.113.10 \
+      --home root@home-b.example.net \
+      --vps-wg-port 51831 --home-wg-port 45001 \
+      --vps-ss-port 31002 --home-ss-port 32002 \
+      --wg-prefix 10.88.2
 
 部署完成后，登录 VPS 使用管理后台：
 
@@ -132,10 +136,10 @@ root 用户安装到 `/usr/local/bin/volwg`；OpenWrt root 安装到 `/usr/bin/v
 
     sudo volwg manager list
     sudo volwg manager links
-    sudo volwg manager show jkt1
+    sudo volwg manager show line1
     sudo volwg manager status
-    sudo volwg manager rename jkt1 "印尼雅加达二号线"
-    sudo volwg manager node jkt1
+    sudo volwg manager rename line1 "备用家宽线路"
+    sudo volwg manager node line1
 
 `links` 会按自定义线路名称分别显示 SS 链接。relay 显示公网可用链接；direct 显示 WireGuard 私网链接和 Xray outbound，仅供对应 VPS 使用。
 
@@ -147,9 +151,9 @@ root 用户安装到 `/usr/local/bin/volwg`；OpenWrt root 安装到 `/usr/bin/v
 
 也可以只输出需要的格式：
 
-    volwg manager node jkt1 ss
-    volwg manager node jkt1 xray
-    volwg manager node jkt1 routing
+    volwg manager node line1 ss
+    volwg manager node line1 xray
+    volwg manager node line1 routing
 
 relay 节点的 `ss://` 链接可以从公网访问；direct 节点包含 WireGuard 私网地址，只能导入到已经连接对应隧道的优化 VPS/Xray，不能直接用于普通公网客户端。
 
@@ -209,20 +213,24 @@ SSH 可能短暂断开，重新连接后使用以下命令检查：
 公网中转：
 
     volwg deploy --mode relay \
-      --node jkt1 --name "印尼雅加达家宽" \
+      --node line1 --name "家宽线路 A" \
       --vps root@203.0.113.10 \
       --vps-public-host 203.0.113.10 \
-      --home root@home.example.com \
+      --home root@home-a.example.net \
       --home-ssh-port 1090 \
+      --vps-wg-port 51830 --home-wg-port 45000 \
+      --vps-ss-port 31000 --home-ss-port 32000 \
       --identity ~/.ssh/id_ed25519
 
 优化机直连：
 
     volwg deploy --mode direct \
-      --node sby1 --name "印尼泗水家宽" \
+      --node line2 --name "家宽线路 B" \
       --vps root@198.51.100.20 \
       --vps-public-host 198.51.100.20 \
-      --home root@home.example.com \
+      --home root@home-b.example.net \
+      --vps-wg-port 51831 --home-wg-port 45001 \
+      --home-ss-port 32001 \
       --identity ~/.ssh/id_ed25519
 
 查看所有参数：
@@ -237,12 +245,16 @@ SSH 可能短暂断开，重新连接后使用以下命令检查：
 - WireGuard 网段：10.88.0.0/24
 - VPS 隧道地址：10.88.0.1
 - 家宽端隧道地址：10.88.0.2
-- WireGuard：51830/UDP
-- SS2022：31000/TCP+UDP
+- VPS WireGuard 公网端口：51830/UDP
+- 家宽机 WireGuard 本地端口：51830/UDP
+- VPS 公网 SS 端口：31000/TCP+UDP（仅 relay）
+- 家宽机 SS2022 服务端口：31000/TCP+UDP
 - SS2022 加密：2022-blake3-aes-128-gcm（16 字节密钥）
 - PersistentKeepalive：25 秒
 
-可通过 --node、--name、--wg-prefix、--wg-port 和 --ss-port 修改。脚本会检查已登记节点的端口和网段冲突；同一节点 ID 默认禁止覆盖，确认需要更新时使用 `--replace`。
+可通过 `--vps-wg-port`、`--home-wg-port`、`--vps-ss-port`、`--home-ss-port` 分别指定两端端口。兼容参数 `--wg-port` 和 `--ss-port` 会把两端设置成同一个值。脚本会检查已登记节点的 VPS 监听端口和网段冲突；同一节点 ID 默认禁止覆盖，确认需要更新时使用 `--replace`。
+
+relay 模式允许两端 SS 使用不同端口，例如公网访问 VPS `31000`，再 DNAT 到家宽机 WireGuard 地址的 `32000`。家宽端主动连接 VPS，因此家宽 WireGuard 本地端口也可以按 NAT 或服务商允许的端口范围单独指定。
 
 ## Xray 路由
 
@@ -251,7 +263,7 @@ SSH 可能短暂断开，重新连接后使用以下命令检查：
     {
       "type": "field",
       "inboundTag": ["需要走家宽的入站 tag"],
-      "outboundTag": "home-jkt1"
+      "outboundTag": "home-line1"
     }
 
 脚本同时输出新版 Xray 和旧版 settings.servers 两种 Shadowsocks outbound 格式。
