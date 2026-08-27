@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-REPO_RAW_URL="https://raw.githubusercontent.com/chnnic/wg-home-exit/main"
+REPO_RAW_URL="https://raw.githubusercontent.com/chnnic/volwg/main"
 TMP_DIR="$(mktemp -d)"
 umask 077
 
@@ -22,10 +22,54 @@ download() {
   fi
 }
 
-echo "正在下载 WG Home Exit 部署向导..."
+echo "正在下载 VolWG 部署向导..."
 download "$REPO_RAW_URL/wg-home-deploy.sh" "$TMP_DIR/wg-home-deploy.sh"
 download "$REPO_RAW_URL/wg-home-key-wizard.sh" "$TMP_DIR/wg-home-key-wizard.sh"
 download "$REPO_RAW_URL/wg-home-manager.sh" "$TMP_DIR/wg-home-manager.sh"
+download "$REPO_RAW_URL/volwg" "$TMP_DIR/volwg"
 chmod 700 "$TMP_DIR/wg-home-deploy.sh" "$TMP_DIR/wg-home-key-wizard.sh" "$TMP_DIR/wg-home-manager.sh"
+chmod 755 "$TMP_DIR/volwg"
 
-bash "$TMP_DIR/wg-home-deploy.sh" "$@"
+if [[ "${VOLWG_TEMPORARY:-0}" == "1" ]]; then
+  "$TMP_DIR/volwg" "$@"
+  exit
+fi
+
+if [[ "$(id -u)" == "0" && -f /etc/openwrt_release ]]; then
+  INSTALL_LIB_DIR="/usr/lib/volwg"
+  INSTALL_BIN_DIR="/usr/bin"
+elif [[ "$(id -u)" == "0" ]]; then
+  INSTALL_LIB_DIR="/usr/local/lib/volwg"
+  INSTALL_BIN_DIR="/usr/local/bin"
+else
+  INSTALL_LIB_DIR="${XDG_DATA_HOME:-${HOME:?}/.local/share}/volwg"
+  INSTALL_BIN_DIR="${HOME:?}/.local/bin"
+fi
+
+mkdir -p "$INSTALL_LIB_DIR" "$INSTALL_BIN_DIR"
+cp "$TMP_DIR/wg-home-deploy.sh" "$TMP_DIR/wg-home-key-wizard.sh" "$TMP_DIR/wg-home-manager.sh" "$INSTALL_LIB_DIR/"
+cp "$TMP_DIR/volwg" "$INSTALL_BIN_DIR/volwg"
+chmod 700 "$INSTALL_LIB_DIR/wg-home-deploy.sh" "$INSTALL_LIB_DIR/wg-home-key-wizard.sh" "$INSTALL_LIB_DIR/wg-home-manager.sh"
+chmod 755 "$INSTALL_BIN_DIR/volwg"
+
+echo "VolWG 已安装：$INSTALL_BIN_DIR/volwg"
+if [[ ":$PATH:" != *":$INSTALL_BIN_DIR:"* ]]; then
+  if [[ "$(id -u)" != "0" ]]; then
+    case "${SHELL:-}" in
+      */zsh) SHELL_RC="${HOME:?}/.zshrc" ;;
+      */bash) SHELL_RC="${HOME:?}/.bashrc" ;;
+      *) SHELL_RC="${HOME:?}/.profile" ;;
+    esac
+    # 保留字面量，让新 shell 启动时再展开 HOME 和 PATH。
+    # shellcheck disable=SC2016
+    PATH_LINE='export PATH="$HOME/.local/bin:$PATH"'
+    if [[ ! -f "$SHELL_RC" ]] || ! grep -Fqx "$PATH_LINE" "$SHELL_RC"; then
+      printf '\n%s\n' "$PATH_LINE" >>"$SHELL_RC"
+    fi
+    echo "已把 $INSTALL_BIN_DIR 加入 $SHELL_RC，新开终端后可直接输入 volwg。"
+  else
+    echo "提示：$INSTALL_BIN_DIR 不在当前 PATH，请把它加入 shell 的 PATH。"
+  fi
+fi
+echo
+"$INSTALL_BIN_DIR/volwg" "$@"

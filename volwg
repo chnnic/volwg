@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+find_lib_dir() {
+  local launcher_dir user_data_dir
+  launcher_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+  user_data_dir="${XDG_DATA_HOME:-${HOME:?}/.local/share}/volwg"
+
+  if [[ -f "$launcher_dir/wg-home-deploy.sh" ]]; then
+    printf '%s' "$launcher_dir"
+  elif [[ -f /usr/lib/volwg/wg-home-deploy.sh ]]; then
+    printf '%s' /usr/lib/volwg
+  elif [[ -f /usr/local/lib/volwg/wg-home-deploy.sh ]]; then
+    printf '%s' /usr/local/lib/volwg
+  elif [[ -f "$user_data_dir/wg-home-deploy.sh" ]]; then
+    printf '%s' "$user_data_dir"
+  else
+    echo "错误：找不到 VolWG 程序文件，请重新运行一键安装命令。" >&2
+    exit 1
+  fi
+}
+
+LIB_DIR="$(find_lib_dir)"
+subcommand="${1:-}"
+
+case "$subcommand" in
+  manager)
+    shift
+    if (($# == 0)); then
+      set -- menu
+    fi
+    exec bash "$LIB_DIR/wg-home-manager.sh" "$@"
+    ;;
+  key)
+    shift
+    exec bash "$LIB_DIR/wg-home-key-wizard.sh" "$@"
+    ;;
+  deploy)
+    shift
+    exec bash "$LIB_DIR/wg-home-deploy.sh" "$@"
+    ;;
+  help|-h|--help)
+    cat <<'EOF'
+VolWG 命令：
+  volwg                 打开引导界面
+  volwg deploy [参数]   部署线路
+  volwg manager         打开本机线路管理界面
+  volwg manager links   查看本机保存的全部 SS 链接
+  volwg key [参数]      双 SSH 窗口公钥向导
+  volwg help            显示此帮助
+EOF
+    ;;
+  *)
+    exec bash "$LIB_DIR/wg-home-deploy.sh" "$@"
+    ;;
+esac

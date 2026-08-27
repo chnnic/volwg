@@ -26,7 +26,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 usage() {
   cat <<'EOF'
 用法：
-  wg-home-deploy.sh --mode relay|direct \
+  volwg deploy --mode relay|direct \
     --node 节点ID --name "线路显示名称" \
     --vps root@VPS地址 --vps-public-host VPS公网IP或域名 \
     --home root@家宽机地址 [选项]
@@ -55,21 +55,21 @@ usage() {
   -h, --help                显示帮助
 
 示例（公网中转）：
-  ./wg-home-deploy.sh --mode relay \
+  volwg deploy --mode relay \
     --node jkt1 --name "印尼雅加达家宽" \
     --vps root@203.0.113.10 --vps-public-host 203.0.113.10 \
     --home root@home.example.com --home-ssh-port 1090 \
     --identity ~/.ssh/id_ed25519 --yes
 
 示例（优化机直连家宽）：
-  ./wg-home-deploy.sh --mode direct \
+  volwg deploy --mode direct \
     --node sby1 --name "印尼泗水家宽" \
     --vps root@198.51.100.20 --vps-public-host 198.51.100.20 \
     --home root@home.example.com --home-ssh-port 1090 \
     --identity ~/.ssh/id_ed25519 --yes
 
 如需在两个 SSH 窗口手动复制/粘贴 WireGuard 公钥，请使用：
-  ./wg-home-key-wizard.sh --help
+  volwg key --help
 EOF
 }
 
@@ -124,7 +124,7 @@ guided_full_deploy() {
 
 if (($# == 0)); then
   echo "============================================================"
-  echo " WireGuard 家宽落地部署向导"
+  echo " VolWG 多线路家宽落地部署向导"
   echo "============================================================"
   echo "  1) 全自动远程部署"
   echo "  2) 双 SSH 窗口：当前机器是 VPS"
@@ -215,6 +215,8 @@ if [[ -n "$IDENTITY" ]]; then
   [[ -f "$IDENTITY" ]] || die "SSH 私钥不存在：$IDENTITY"
 fi
 [[ -f "$SCRIPT_DIR/wg-home-manager.sh" ]] || die "缺少 wg-home-manager.sh；请使用仓库完整版或一键安装命令"
+[[ -f "$SCRIPT_DIR/wg-home-key-wizard.sh" ]] || die "缺少 wg-home-key-wizard.sh；请使用仓库完整版或一键安装命令"
+[[ -f "$SCRIPT_DIR/volwg" ]] || die "缺少 volwg 快捷入口；请使用仓库完整版或一键安装命令"
 
 SSH_COMMON=(
   -o BatchMode=yes
@@ -682,8 +684,11 @@ EOF
 chmod 600 "$TMP_DIR/node.conf"
 
 scp_vps "$SCRIPT_DIR/wg-home-manager.sh" /tmp/wg-home-manager
+scp_vps "$SCRIPT_DIR/wg-home-deploy.sh" /tmp/volwg-deploy
+scp_vps "$SCRIPT_DIR/wg-home-key-wizard.sh" /tmp/volwg-key-wizard
+scp_vps "$SCRIPT_DIR/volwg" /tmp/volwg-launcher
 scp_vps "$TMP_DIR/node.conf" "/tmp/$NODE_ID.conf"
-ssh_vps "set -eu; install -m 755 /tmp/wg-home-manager /usr/local/sbin/wg-home-manager; install -d -m 700 /etc/wg-home-exit/nodes; install -m 600 '/tmp/$NODE_ID.conf' '/etc/wg-home-exit/nodes/$NODE_ID.conf'; rm -f /tmp/wg-home-manager '/tmp/$NODE_ID.conf'"
+ssh_vps "set -eu; install -d -m 755 /usr/local/lib/volwg /usr/local/bin; install -m 700 /tmp/volwg-deploy /usr/local/lib/volwg/wg-home-deploy.sh; install -m 700 /tmp/volwg-key-wizard /usr/local/lib/volwg/wg-home-key-wizard.sh; install -m 700 /tmp/wg-home-manager /usr/local/lib/volwg/wg-home-manager.sh; install -m 755 /tmp/volwg-launcher /usr/local/bin/volwg; install -m 755 /tmp/wg-home-manager /usr/local/sbin/wg-home-manager; install -d -m 700 /etc/wg-home-exit/nodes; install -m 600 '/tmp/$NODE_ID.conf' '/etc/wg-home-exit/nodes/$NODE_ID.conf'; rm -f /tmp/wg-home-manager /tmp/volwg-deploy /tmp/volwg-key-wizard /tmp/volwg-launcher '/tmp/$NODE_ID.conf'"
 
 echo
 echo "线路名称：$DISPLAY_NAME"
@@ -719,9 +724,9 @@ cat <<EOF
 EOF
 echo
 echo "以后登录 VPS 可查看所有线路和链接："
-echo "  wg-home-manager list"
-echo "  wg-home-manager links"
-echo "  wg-home-manager show $NODE_ID"
+echo "  volwg manager list"
+echo "  volwg manager links"
+echo "  volwg manager show $NODE_ID"
 if [[ "$MODE" == "relay" ]]; then
   echo
   echo "注意：确认 VPS 防火墙允许 $WG_PORT/UDP 和 $SS_PORT/TCP+UDP。"

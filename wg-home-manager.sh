@@ -11,13 +11,13 @@ die() {
 usage() {
   cat <<'EOF'
 用法：
-  wg-home-manager list             查看所有线路
-  wg-home-manager links            查看所有线路的 SS 链接
-  wg-home-manager show 节点ID      查看单条线路详情
-  wg-home-manager status           查看 WireGuard 握手状态
-  wg-home-manager rename ID 名称   修改线路名称和 SS 链接备注
-  wg-home-manager register         登记旧版本或手工创建的 SS 线路
-  wg-home-manager menu             打开交互式管理菜单
+  volwg manager list             查看所有线路
+  volwg manager links            查看所有线路的 SS 链接
+  volwg manager show 节点ID      查看单条线路详情
+  volwg manager status           查看 WireGuard 握手状态
+  volwg manager rename ID 名称   修改线路名称和 SS 链接备注
+  volwg manager register         登记旧版本或手工创建的 SS 线路
+  volwg manager                  打开交互式管理菜单
 
 说明：
   每条线路彼此独立，不会自动配置负载均衡。
@@ -223,7 +223,7 @@ menu() {
   local choice node_id new_name
   while true; do
     echo "============================================================"
-    echo " WG Home Exit 线路管理"
+    echo " VolWG 线路管理"
     echo "============================================================"
     echo "  1) 查看所有线路"
     echo "  2) 查看所有 SS 链接"
@@ -261,7 +261,7 @@ case "$command_name" in
   links) list_links ;;
   show) [[ -n "${2:-}" ]] || die "请提供节点 ID"; show_node "$(node_file "$2")" ;;
   status) show_status ;;
-  rename) [[ -n "${2:-}" && -n "${3:-}" ]] || die "用法：wg-home-manager rename ID 新名称"; rename_node "$(node_file "$2")" "$3" ;;
+  rename) [[ -n "${2:-}" && -n "${3:-}" ]] || die "用法：volwg manager rename ID 新名称"; rename_node "$(node_file "$2")" "$3" ;;
   register) register_node ;;
   menu) menu ;;
   -h|--help|help) usage ;;

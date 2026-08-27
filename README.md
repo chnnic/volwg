@@ -1,4 +1,4 @@
-# WG Home Exit
+# VolWG
 
 用 WireGuard 将公网/优化 VPS 与位于 NAT、CGNAT 后面的一个或多个家宽机连接，并在每个家宽端运行独立 SS2022 服务。
 
@@ -10,13 +10,17 @@
 
 在控制电脑、VPS 或家宽机执行：
 
-    bash -c "$(curl -fsSL https://raw.githubusercontent.com/chnnic/wg-home-exit/main/install.sh)"
+    bash -c "$(curl -fsSL https://raw.githubusercontent.com/chnnic/volwg/main/install.sh)"
 
 如果当前机器需要 root 权限，例如在 VPS 或 Debian 家宽机配置本机 WireGuard：
 
-    sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/chnnic/wg-home-exit/main/install.sh)"
+    sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/chnnic/volwg/main/install.sh)"
 
-命令会临时下载主脚本、双窗口向导和线路管理器，退出后清理临时文件。运行后直接进入引导菜单，不需要记忆参数。
+命令会安装 `volwg` 快捷命令，然后直接进入引导菜单。以后重新登录 SSH 或打开新终端，只需输入：
+
+    volwg
+
+root 用户安装到 `/usr/local/bin/volwg`；OpenWrt root 安装到 `/usr/bin/volwg`；普通用户安装到 `~/.local/bin/volwg`，安装器会配置新终端所需的 PATH。
 
 安全提示：一键执行远程脚本前，可以先在仓库中检查 install.sh、wg-home-deploy.sh 和 wg-home-key-wizard.sh。
 
@@ -65,13 +69,14 @@
 
 克隆仓库：
 
-    git clone https://github.com/chnnic/wg-home-exit.git
-    cd wg-home-exit
+    git clone https://github.com/chnnic/volwg.git
+    cd volwg
     chmod 700 wg-home-deploy.sh wg-home-key-wizard.sh wg-home-manager.sh
+    chmod 755 volwg
 
 直接运行主脚本：
 
-    ./wg-home-deploy.sh
+    ./volwg
 
 入口菜单：
 
@@ -89,7 +94,7 @@
 
 例如第一条印尼雅加达线路：
 
-    ./wg-home-deploy.sh --mode relay \
+    volwg deploy --mode relay \
       --node jkt1 --name "印尼雅加达家宽" \
       --vps root@203.0.113.10 --vps-public-host 203.0.113.10 \
       --home root@home-jkt.example.com \
@@ -97,7 +102,7 @@
 
 第二条印尼泗水线路：
 
-    ./wg-home-deploy.sh --mode relay \
+    volwg deploy --mode relay \
       --node sby1 --name "印尼泗水家宽" \
       --vps root@203.0.113.10 --vps-public-host 203.0.113.10 \
       --home root@home-sby.example.com \
@@ -105,21 +110,21 @@
 
 部署完成后，登录 VPS 使用管理后台：
 
-    sudo wg-home-manager menu
+    sudo volwg manager
 
 也可以直接查询：
 
-    sudo wg-home-manager list
-    sudo wg-home-manager links
-    sudo wg-home-manager show jkt1
-    sudo wg-home-manager status
-    sudo wg-home-manager rename jkt1 "印尼雅加达二号线"
+    sudo volwg manager list
+    sudo volwg manager links
+    sudo volwg manager show jkt1
+    sudo volwg manager status
+    sudo volwg manager rename jkt1 "印尼雅加达二号线"
 
 `links` 会按自定义线路名称分别显示 SS 链接。relay 显示公网可用链接；direct 显示 WireGuard 私网链接和 Xray outbound，仅供对应 VPS 使用。
 
 旧版本已经部署好的线路不会被自动覆盖。可以运行下面的命令，将旧 SS 链接粘贴登记到管理后台，并重新设置易于区分的名称：
 
-    sudo wg-home-manager register
+    sudo volwg manager register
 
 ## 双 SSH 窗口交换公钥
 
@@ -127,7 +132,7 @@
 
 窗口 A，公网或优化 VPS：
 
-    sudo ./wg-home-deploy.sh
+    sudo ./volwg
 
 选择：
 
@@ -135,7 +140,7 @@
 
 窗口 B，家宽机：
 
-    sudo ./wg-home-deploy.sh
+    sudo ./volwg
 
 选择：
 
@@ -155,8 +160,8 @@
 
 也可以直接运行：
 
-    sudo ./wg-home-key-wizard.sh --role vps
-    sudo ./wg-home-key-wizard.sh --role home
+    sudo ./volwg key --role vps
+    sudo ./volwg key --role home
 
 OpenWrt 首次安装 WireGuard 后，向导会提示运行：
 
@@ -170,7 +175,7 @@ SSH 可能短暂断开，重新连接后使用以下命令检查：
 
 公网中转：
 
-    ./wg-home-deploy.sh --mode relay \
+    volwg deploy --mode relay \
       --node jkt1 --name "印尼雅加达家宽" \
       --vps root@203.0.113.10 \
       --vps-public-host 203.0.113.10 \
@@ -180,7 +185,7 @@ SSH 可能短暂断开，重新连接后使用以下命令检查：
 
 优化机直连：
 
-    ./wg-home-deploy.sh --mode direct \
+    volwg deploy --mode direct \
       --node sby1 --name "印尼泗水家宽" \
       --vps root@198.51.100.20 \
       --vps-public-host 198.51.100.20 \
@@ -189,7 +194,7 @@ SSH 可能短暂断开，重新连接后使用以下命令检查：
 
 查看所有参数：
 
-    ./wg-home-deploy.sh --help
+    volwg deploy --help
 
 ## 节点和默认值
 
@@ -230,6 +235,7 @@ SS2022、SSH 私钥和 WireGuard 私钥均属于敏感信息，不要公开。
 ## 文件
 
 - install.sh：一键下载和启动入口。
+- volwg：安装后的统一快捷入口。
 - wg-home-deploy.sh：完整部署脚本和引导式入口。
 - wg-home-key-wizard.sh：双 SSH 窗口 WireGuard 公钥交换向导。
 - wg-home-manager.sh：安装到 VPS 的多线路查看和 SS 链接管理后台。
