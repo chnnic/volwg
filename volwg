@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+REPO_RAW_URL="https://raw.githubusercontent.com/chnnic/volwg/main"
+BUILTIN_VERSION="1.3.0"
+
 find_lib_dir() {
   local launcher_dir user_data_dir
   launcher_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -21,9 +24,217 @@ find_lib_dir() {
 }
 
 LIB_DIR="$(find_lib_dir)"
-subcommand="${1:-}"
 
+current_version() {
+  if [[ -s "$LIB_DIR/VERSION" ]]; then
+    tr -d '[:space:]' <"$LIB_DIR/VERSION"
+  else
+    printf '%s' "$BUILTIN_VERSION"
+  fi
+}
+
+fetch_text() {
+  local url="$1"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL --retry 3 "$url"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO- "$url"
+  else
+    echo "错误：在线升级需要 curl 或 wget。" >&2
+    return 1
+  fi
+}
+
+clear_screen() {
+  [[ -t 1 ]] || return 0
+  if command -v clear >/dev/null 2>&1; then
+    clear
+  else
+    printf '\033[2J\033[H'
+  fi
+}
+
+pause_screen() {
+  [[ -t 0 ]] || return 0
+  echo
+  read -r -p "按 Enter 返回菜单..." _
+}
+
+print_header() {
+  echo "============================================================"
+  echo " VolWG v$(current_version) · 多线路家宽落地"
+  echo "============================================================"
+}
+
+show_version() {
+  local latest=""
+  echo "当前版本：v$(current_version)"
+  if latest="$(fetch_text "$REPO_RAW_URL/VERSION" 2>/dev/null)"; then
+    latest="${latest//[[:space:]]/}"
+    echo "在线版本：v$latest"
+    if [[ "$latest" == "$(current_version)" ]]; then
+      echo "状态：已是最新版本"
+    else
+      echo "状态：发现可用更新"
+    fi
+  else
+    echo "在线版本：检查失败"
+  fi
+}
+
+online_update() {
+  local current latest installer launcher_path launcher_dir
+  current="$(current_version)"
+  echo "正在检查 GitHub 更新..."
+  latest="$(fetch_text "$REPO_RAW_URL/VERSION")" || return 1
+  latest="${latest//[[:space:]]/}"
+  [[ "$latest" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+    echo "错误：在线版本号无效：$latest" >&2
+    return 1
+  }
+  echo "当前版本：v$current"
+  echo "在线版本：v$latest"
+  if [[ "$current" == "$latest" ]]; then
+    echo "VolWG 已是最新版本。"
+    return 0
+  fi
+
+  installer="$(fetch_text "$REPO_RAW_URL/install.sh")" || return 1
+  launcher_path="$(command -v volwg 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")"
+  launcher_dir="$(dirname -- "$launcher_path")"
+  echo "正在升级 VolWG..."
+  if [[ -w "$LIB_DIR" && -w "$launcher_dir" ]]; then
+    VOLWG_NO_LAUNCH=1 bash -c "$installer"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo env VOLWG_NO_LAUNCH=1 bash -c "$installer"
+  else
+    echo "错误：安装目录需要 root 权限，请使用 sudo volwg update。" >&2
+    return 1
+  fi
+  echo "升级完成：v$current → v$latest"
+  echo "重新输入 volwg 即可使用新版本。"
+}
+
+remote_manager() {
+  local target port identity
+  local -a ssh_args
+  read -r -p "VPS SSH，例如 root@203.0.113.10：" target
+  [[ -n "$target" ]] || { echo "VPS SSH 不能为空。"; return 1; }
+  read -r -p "VPS SSH 端口 [22]：" port
+  port="${port:-22}"
+  read -r -p "SSH 私钥路径（留空使用 ssh-agent/~/.ssh/config）：" identity
+  ssh_args=(-o ConnectTimeout=12 -o StrictHostKeyChecking=accept-new -p "$port")
+  if [[ -n "$identity" ]]; then
+    ssh_args+=(-i "$identity" -o IdentitiesOnly=yes)
+  fi
+  ssh -t "${ssh_args[@]}" "$target" "volwg manager"
+}
+
+deployment_menu() {
+  local choice
+  while true; do
+    clear_screen
+    print_header
+    echo " 部署与配对"
+    echo
+    echo "  1) 全自动远程部署"
+    echo "  2) 双 SSH 窗口：当前机器是 VPS"
+    echo "  3) 双 SSH 窗口：当前机器是家宽机"
+    echo "  0) 返回主菜单"
+    read -r -p "请选择 [0-3]：" choice
+    case "$choice" in
+      1) bash "$LIB_DIR/wg-home-deploy.sh" --guided; pause_screen ;;
+      2) bash "$LIB_DIR/wg-home-key-wizard.sh" --role vps; pause_screen ;;
+      3) bash "$LIB_DIR/wg-home-key-wizard.sh" --role home; pause_screen ;;
+      0) return ;;
+      *) echo "选择无效。"; pause_screen ;;
+    esac
+  done
+}
+
+management_menu() {
+  local choice
+  while true; do
+    clear_screen
+    print_header
+    echo " 线路管理"
+    echo
+    echo "  1) 管理本机线路"
+    echo "  2) 连接远程 VPS 管理"
+    echo "  3) 快速查看本机全部 SS 链接"
+    echo "  4) 快速查看本机握手状态"
+    echo "  0) 返回主菜单"
+    read -r -p "请选择 [0-4]：" choice
+    case "$choice" in
+      1) bash "$LIB_DIR/wg-home-manager.sh" menu ;;
+      2) remote_manager; pause_screen ;;
+      3) clear_screen; bash "$LIB_DIR/wg-home-manager.sh" links; pause_screen ;;
+      4) clear_screen; bash "$LIB_DIR/wg-home-manager.sh" status; pause_screen ;;
+      0) return ;;
+      *) echo "选择无效。"; pause_screen ;;
+    esac
+  done
+}
+
+system_menu() {
+  local choice
+  while true; do
+    clear_screen
+    print_header
+    echo " 系统维护"
+    echo
+    echo "  1) 查看版本"
+    echo "  2) 在线升级"
+    echo "  3) 查看命令帮助"
+    echo "  0) 返回主菜单"
+    read -r -p "请选择 [0-3]：" choice
+    case "$choice" in
+      1) clear_screen; show_version; pause_screen ;;
+      2) clear_screen; online_update; pause_screen ;;
+      3) clear_screen; show_help; pause_screen ;;
+      0) return ;;
+      *) echo "选择无效。"; pause_screen ;;
+    esac
+  done
+}
+
+show_help() {
+  cat <<'EOF'
+VolWG 命令：
+  volwg                    打开多级引导界面
+  volwg deploy [参数]      部署线路
+  volwg manager            打开本机线路管理界面
+  volwg manager links      查看本机保存的全部 SS 链接
+  volwg key [参数]         双 SSH 窗口公钥向导
+  volwg version            查看本地和在线版本
+  volwg update             在线升级
+  volwg help               显示此帮助
+EOF
+}
+
+main_menu() {
+  local choice
+  while true; do
+    clear_screen
+    print_header
+    echo "  1) 部署与配对"
+    echo "  2) 线路管理"
+    echo "  3) 系统维护与在线升级"
+    echo "  0) 退出"
+    read -r -p "请选择 [0-3]：" choice
+    case "$choice" in
+      1) deployment_menu ;;
+      2) management_menu ;;
+      3) system_menu ;;
+      0) clear_screen; return ;;
+      *) echo "选择无效。"; pause_screen ;;
+    esac
+  done
+}
+
+subcommand="${1:-}"
 case "$subcommand" in
+  "") main_menu ;;
   manager)
     shift
     if (($# == 0)); then
@@ -31,26 +242,10 @@ case "$subcommand" in
     fi
     exec bash "$LIB_DIR/wg-home-manager.sh" "$@"
     ;;
-  key)
-    shift
-    exec bash "$LIB_DIR/wg-home-key-wizard.sh" "$@"
-    ;;
-  deploy)
-    shift
-    exec bash "$LIB_DIR/wg-home-deploy.sh" "$@"
-    ;;
-  help|-h|--help)
-    cat <<'EOF'
-VolWG 命令：
-  volwg                 打开引导界面
-  volwg deploy [参数]   部署线路
-  volwg manager         打开本机线路管理界面
-  volwg manager links   查看本机保存的全部 SS 链接
-  volwg key [参数]      双 SSH 窗口公钥向导
-  volwg help            显示此帮助
-EOF
-    ;;
-  *)
-    exec bash "$LIB_DIR/wg-home-deploy.sh" "$@"
-    ;;
+  key) shift; exec bash "$LIB_DIR/wg-home-key-wizard.sh" "$@" ;;
+  deploy) shift; exec bash "$LIB_DIR/wg-home-deploy.sh" "$@" ;;
+  version) show_version ;;
+  update|upgrade) online_update ;;
+  help|-h|--help) show_help ;;
+  *) exec bash "$LIB_DIR/wg-home-deploy.sh" "$@" ;;
 esac

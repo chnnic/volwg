@@ -8,6 +8,21 @@ die() {
   exit 1
 }
 
+clear_screen() {
+  [[ -t 1 ]] || return 0
+  if command -v clear >/dev/null 2>&1; then
+    clear
+  else
+    printf '\033[2J\033[H'
+  fi
+}
+
+pause_screen() {
+  [[ -t 0 ]] || return 0
+  echo
+  read -r -p "按 Enter 返回线路菜单..." _
+}
+
 usage() {
   cat <<'EOF'
 用法：
@@ -252,11 +267,12 @@ EOF
 
 menu() {
   local choice node_id new_name
-  legacy_notice
   while true; do
+    clear_screen
     echo "============================================================"
     echo " VolWG 线路管理"
     echo "============================================================"
+    legacy_notice
     echo "  1) 查看所有线路"
     echo "  2) 查看所有 SS 链接"
     echo "  3) 查看单条线路详情"
@@ -267,19 +283,23 @@ menu() {
     read -r -p "请选择 [0-6]：" choice
     echo
     case "$choice" in
-      1) list_nodes ;;
-      2) list_links ;;
+      1) clear_screen; list_nodes; pause_screen ;;
+      2) clear_screen; list_links; pause_screen ;;
       3)
+        clear_screen
         read -r -p "输入节点 ID：" node_id
         show_node "$(node_file "$node_id")"
+        pause_screen
         ;;
-      4) show_status ;;
+      4) clear_screen; show_status; pause_screen ;;
       5)
+        clear_screen
         read -r -p "输入节点 ID：" node_id
         read -r -p "输入新的线路名称：" new_name
         rename_node "$(node_file "$node_id")" "$new_name"
+        pause_screen
         ;;
-      6) register_node ;;
+      6) clear_screen; register_node; pause_screen ;;
       0) return ;;
       *) echo "选择无效。" ;;
     esac

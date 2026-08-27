@@ -20,6 +20,20 @@
 
     volwg
 
+界面采用多级菜单，并在页面切换时自动清屏：
+
+    主菜单
+      ├─ 部署与配对
+      ├─ 线路管理
+      └─ 系统维护与在线升级
+
+查看版本或在线升级：
+
+    volwg version
+    volwg update
+
+版本号显示在主界面顶部。在线升级只替换 VolWG 程序文件，不会删除 `/etc/wg-home-exit/nodes` 中的线路记录。
+
 root 用户安装到 `/usr/local/bin/volwg`；OpenWrt root 安装到 `/usr/bin/volwg`；普通用户安装到 `~/.local/bin/volwg`，安装器会配置新终端所需的 PATH。
 
 安全提示：一键执行远程脚本前，可以先在仓库中检查 install.sh、wg-home-deploy.sh 和 wg-home-key-wizard.sh。
@@ -238,6 +252,7 @@ SS2022、SSH 私钥和 WireGuard 私钥均属于敏感信息，不要公开。
 
 ## 文件
 
+- VERSION：当前语义化版本号。
 - install.sh：一键下载和启动入口。
 - volwg：安装后的统一快捷入口。
 - wg-home-deploy.sh：完整部署脚本和引导式入口。

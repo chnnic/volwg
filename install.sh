@@ -28,6 +28,7 @@ download "$REPO_RAW_URL/wg-home-deploy.sh" "$TMP_DIR/wg-home-deploy.sh"
 download "$REPO_RAW_URL/wg-home-key-wizard.sh" "$TMP_DIR/wg-home-key-wizard.sh"
 download "$REPO_RAW_URL/wg-home-manager.sh" "$TMP_DIR/wg-home-manager.sh"
 download "$REPO_RAW_URL/volwg" "$TMP_DIR/volwg"
+download "$REPO_RAW_URL/VERSION" "$TMP_DIR/VERSION"
 chmod 700 "$TMP_DIR/wg-home-deploy.sh" "$TMP_DIR/wg-home-key-wizard.sh" "$TMP_DIR/wg-home-manager.sh"
 chmod 755 "$TMP_DIR/volwg"
 
@@ -52,8 +53,10 @@ fi
 
 mkdir -p "$INSTALL_LIB_DIR" "$INSTALL_BIN_DIR"
 cp "$TMP_DIR/wg-home-deploy.sh" "$TMP_DIR/wg-home-key-wizard.sh" "$TMP_DIR/wg-home-manager.sh" "$INSTALL_LIB_DIR/"
+cp "$TMP_DIR/VERSION" "$INSTALL_LIB_DIR/VERSION"
 cp "$TMP_DIR/volwg" "$INSTALL_BIN_DIR/volwg"
 chmod 700 "$INSTALL_LIB_DIR/wg-home-deploy.sh" "$INSTALL_LIB_DIR/wg-home-key-wizard.sh" "$INSTALL_LIB_DIR/wg-home-manager.sh"
+chmod 644 "$INSTALL_LIB_DIR/VERSION"
 chmod 755 "$INSTALL_BIN_DIR/volwg"
 
 echo "VolWG 已安装：$INSTALL_BIN_DIR/volwg"
@@ -76,4 +79,7 @@ if [[ ":$PATH:" != *":$INSTALL_BIN_DIR:"* ]]; then
   fi
 fi
 echo
+if [[ "${VOLWG_NO_LAUNCH:-0}" == "1" ]]; then
+  exit
+fi
 "$INSTALL_BIN_DIR/volwg" "$@"
