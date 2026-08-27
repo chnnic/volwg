@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 REPO_RAW_URL="https://raw.githubusercontent.com/chnnic/volwg/main"
-BUILTIN_VERSION="1.3.1"
+BUILTIN_VERSION="1.3.2"
 
 find_lib_dir() {
   local launcher_dir user_data_dir
@@ -45,6 +45,19 @@ fetch_text() {
   fi
 }
 
+latest_version() {
+  local release_json latest=""
+  if release_json="$(fetch_text 'https://api.github.com/repos/chnnic/volwg/releases/latest' 2>/dev/null)"; then
+    latest="$(printf '%s\n' "$release_json" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v\([^"]*\)".*/\1/p' | head -n 1)"
+  fi
+  if [[ ! "$latest" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    latest="$(fetch_text "$REPO_RAW_URL/VERSION?cache=$(date +%s)" 2>/dev/null || true)"
+    latest="${latest//[[:space:]]/}"
+  fi
+  [[ "$latest" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+  printf '%s' "$latest"
+}
+
 clear_screen() {
   [[ -t 1 ]] || return 0
   if command -v clear >/dev/null 2>&1; then
@@ -76,8 +89,7 @@ EOF
 show_version() {
   local latest=""
   echo "当前版本：v$(current_version)"
-  if latest="$(fetch_text "$REPO_RAW_URL/VERSION?cache=$(date +%s)" 2>/dev/null)"; then
-    latest="${latest//[[:space:]]/}"
+  if latest="$(latest_version)"; then
     echo "在线版本：v$latest"
     if [[ "$latest" == "$(current_version)" ]]; then
       echo "状态：已是最新版本"
@@ -93,8 +105,10 @@ online_update() {
   local current latest installer launcher_path launcher_dir
   current="$(current_version)"
   echo "正在检查 GitHub 更新..."
-  latest="$(fetch_text "$REPO_RAW_URL/VERSION?cache=$(date +%s)")" || return 1
-  latest="${latest//[[:space:]]/}"
+  latest="$(latest_version)" || {
+    echo "错误：无法获取在线版本。" >&2
+    return 1
+  }
   [[ "$latest" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
     echo "错误：在线版本号无效：$latest" >&2
     return 1
