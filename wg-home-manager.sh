@@ -107,6 +107,17 @@ list_nodes() {
     status="$(node_status "$iface")"
     printf '%-10s %-24.24s %-8s %-18s %-22s %s\n' "$id" "$name" "$mode" "$iface" "$endpoint" "$status"
   done
+  if ((found == 0)) && [[ -f /etc/wireguard/wg-home.conf ]]; then
+    mode="direct"
+    endpoint="未保存"
+    if command -v nft >/dev/null 2>&1 && nft list table ip wg_home >/dev/null 2>&1; then
+      mode="relay"
+      endpoint="$(nft list table ip wg_home 2>/dev/null | sed -n 's/.*dnat to \([^ ]*\).*/\1/p' | head -n 1)"
+      endpoint="${endpoint:-未保存}"
+    fi
+    printf '%-10s %-24.24s %-8s %-18s %-22s %s\n' "legacy" "旧版未登记线路" "$mode" "wg-home" "$endpoint" "$(node_status wg-home)"
+    found=1
+  fi
   ((found == 1)) || echo "尚未登记线路。"
 }
 
@@ -124,6 +135,12 @@ list_links() {
     [[ "$mode" == "relay" ]] || echo "  注意：direct 链接仅在该 VPS/WireGuard 网络内可达。"
     echo
   done
+  if ((found == 0)) && [[ -f /etc/wireguard/wg-home.conf ]]; then
+    echo "[legacy] 检测到旧版线路，但旧版 VPS 没有保存 SS 密钥/链接。"
+    echo "请使用：volwg manager register"
+    echo
+    found=1
+  fi
   ((found == 1)) || echo "尚未登记线路。"
 }
 
@@ -155,14 +172,18 @@ show_node() {
 }
 
 show_status() {
-  local file id name iface
+  local file id name iface found=0
   shopt -s nullglob
   for file in "$STATE_DIR"/*.conf; do
+    found=1
     id="$(field "$file" NODE_ID)"
     name="$(decode "$(field "$file" DISPLAY_NAME_B64)")"
     iface="$(field "$file" WG_INTERFACE)"
     printf '%-10s %-24.24s %s\n' "$id" "$name" "$(node_status "$iface")"
   done
+  if ((found == 0)) && [[ -f /etc/wireguard/wg-home.conf ]]; then
+    printf '%-10s %-24.24s %s\n' "legacy" "旧版未登记线路" "$(node_status wg-home)"
+  fi
 }
 
 rename_node() {
