@@ -17,6 +17,8 @@ VPS_WG_PORT="51830"
 HOME_WG_PORT="51830"
 VPS_SS_PORT="31000"
 HOME_SS_PORT="31000"
+HOME_BACKEND="ss-rust"
+SS_RUST_VERSION="v1.25.0"
 WG_PREFIX="10.88.0"
 NODE_ID="home1"
 DISPLAY_NAME="家宽线路 1"
@@ -52,6 +54,7 @@ usage() {
   --home-wg-port PORT       家宽机 WireGuard 本地 UDP 端口，默认 51830
   --vps-ss-port PORT        relay 模式的 VPS 公网 SS 端口，默认 31000
   --home-ss-port PORT       家宽机 SS2022 服务端口，默认 31000
+  --home-backend TYPE       家宽服务端：ss-rust（默认）或 xray
   --wg-port PORT            兼容选项：同时设置两端 WireGuard 端口
   --ss-port PORT            兼容选项：同时设置两端 SS 端口
   --wg-prefix A.B.C         隧道前缀，默认 10.88.0
@@ -67,6 +70,7 @@ usage() {
     --home root@home-a.example.net --home-ssh-port 1090 \
     --vps-wg-port 51830 --home-wg-port 45000 \
     --vps-ss-port 31000 --home-ss-port 32000 \
+    --home-backend ss-rust \
     --identity ~/.ssh/id_ed25519 --yes
 
 示例（优化机直连家宽）：
@@ -76,6 +80,7 @@ usage() {
     --home root@home-b.example.net --home-ssh-port 1090 \
     --vps-wg-port 51831 --home-wg-port 45001 \
     --home-ss-port 32001 \
+    --home-backend ss-rust \
     --identity ~/.ssh/id_ed25519 --yes
 
 如需在两个 SSH 窗口手动复制/粘贴 WireGuard 公钥，请使用：
@@ -103,7 +108,7 @@ prompt_with_default() {
 }
 
 guided_full_deploy() {
-  local mode_choice identity_answer default_public_host
+  local mode_choice backend_choice identity_answer default_public_host
 
   echo
   echo "请选择部署结构："
@@ -136,6 +141,16 @@ guided_full_deploy() {
   else
     VPS_SS_PORT="$HOME_SS_PORT"
   fi
+  echo
+  echo "请选择家宽机 SS2022 服务端后端："
+  echo "  1) ss-rust ssserver（推荐，轻量）"
+  echo "  2) Xray Core（兼容模式）"
+  read -r -p "输入 1 或 2 [1]：" backend_choice
+  case "${backend_choice:-1}" in
+    1) HOME_BACKEND="ss-rust" ;;
+    2) HOME_BACKEND="xray" ;;
+    *) die "家宽服务端后端选择无效" ;;
+  esac
 }
 
 if (($# == 0)); then
@@ -192,6 +207,7 @@ while (($#)); do
     --home-wg-port) HOME_WG_PORT="${2:-}"; shift 2 ;;
     --vps-ss-port) VPS_SS_PORT="${2:-}"; shift 2 ;;
     --home-ss-port) HOME_SS_PORT="${2:-}"; shift 2 ;;
+    --home-backend) HOME_BACKEND="${2:-}"; shift 2 ;;
     --wg-port) VPS_WG_PORT="${2:-}"; HOME_WG_PORT="${2:-}"; shift 2 ;;
     --ss-port) VPS_SS_PORT="${2:-}"; HOME_SS_PORT="${2:-}"; shift 2 ;;
     --wg-prefix) WG_PREFIX="${2:-}"; shift 2 ;;
@@ -208,6 +224,7 @@ if [[ "$GUIDED" == "1" ]]; then
 fi
 
 [[ "$MODE" == "relay" || "$MODE" == "direct" ]] || die "--mode 必须是 relay 或 direct"
+[[ "$HOME_BACKEND" == "ss-rust" || "$HOME_BACKEND" == "xray" ]] || die "--home-backend 必须是 ss-rust 或 xray"
 [[ "$NODE_ID" =~ ^[a-z0-9][a-z0-9_]{0,7}$ ]] || die "--node 必须是 1-8 位小写字母、数字或下划线"
 [[ -n "$DISPLAY_NAME" ]] || die "--name 不能为空"
 [[ -n "$VPS_TARGET" ]] || die "缺少 --vps"
@@ -235,6 +252,12 @@ fi
 
 WG_IFACE="wgh_$NODE_ID"
 XRAY_SERVICE="xray-wgh-$NODE_ID"
+SS_RUST_SERVICE="ssrust-wgh-$NODE_ID"
+if [[ "$HOME_BACKEND" == "ss-rust" ]]; then
+  HOME_SERVICE="$SS_RUST_SERVICE"
+else
+  HOME_SERVICE="$XRAY_SERVICE"
+fi
 NFT_SERVICE="wgh-nft-$NODE_ID"
 
 for command_name in ssh scp openssl mktemp sed awk base64; do
@@ -310,11 +333,19 @@ base64url_value() {
   printf '%s' "$1" | base64 | tr '+/' '-_' | tr -d '=\r\n'
 }
 
+TMP_DIR="$(mktemp -d)"
+chmod 700 "$TMP_DIR"
+cleanup() {
+  rm -rf -- "$TMP_DIR"
+}
+trap cleanup EXIT
+
 echo "节点 ID：$NODE_ID"
 echo "线路名称：$DISPLAY_NAME"
 echo "部署模式：$MODE"
 echo "公网/优化 VPS：$VPS_TARGET（SSH $VPS_SSH_PORT）"
 echo "家宽机：$OPENWRT_TARGET（SSH $OPENWRT_SSH_PORT）"
+echo "家宽服务端：$HOME_BACKEND"
 echo "WireGuard：${WG_IFACE}，${WG_PREFIX}.1 ↔ ${WG_PREFIX}.2"
 echo "  VPS 公网 UDP：$VPS_WG_PORT"
 echo "  家宽机本地 UDP：$HOME_WG_PORT"
@@ -323,8 +354,8 @@ if [[ "$MODE" == "relay" ]]; then
   echo "VPS 公网 SS：$VPS_PUBLIC_HOST:$VPS_SS_PORT/TCP+UDP"
 fi
 echo
-echo "脚本会自动安装 WireGuard；缺少 Xray 时也会自动安装。"
-echo "每个节点使用独立 WireGuard、Xray 和防火墙配置；不会配置负载均衡。"
+echo "脚本会自动安装 WireGuard 和所选 SS2022 服务端。"
+echo "每个节点使用独立 WireGuard、SS 服务和防火墙配置；不会配置负载均衡。"
 
 if [[ "$ASSUME_YES" != "1" ]]; then
   read -r -p "输入 yes 继续：" answer
@@ -350,6 +381,87 @@ fi
 collision="$(ssh_vps "set -eu; for f in /etc/wg-home-exit/nodes/*.conf; do test -f \"\$f\" || continue; test \"\$f\" = '/etc/wg-home-exit/nodes/$NODE_ID.conf' && continue; FILE_NODE=\$(sed -n 's/^NODE_ID=//p' \"\$f\" | head -n1); FILE_VPS_WG_PORT=\$(sed -n 's/^VPS_WG_PORT=//p' \"\$f\" | head -n1); test -n \"\$FILE_VPS_WG_PORT\" || FILE_VPS_WG_PORT=\$(sed -n 's/^WG_PORT=//p' \"\$f\" | head -n1); FILE_WG_PREFIX=\$(sed -n 's/^WG_PREFIX=//p' \"\$f\" | head -n1); FILE_MODE=\$(sed -n 's/^MODE=//p' \"\$f\" | head -n1); FILE_VPS_SS_PORT=\$(sed -n 's/^VPS_SS_PORT=//p' \"\$f\" | head -n1); test -n \"\$FILE_VPS_SS_PORT\" || FILE_VPS_SS_PORT=\$(sed -n 's/^SS_PORT=//p' \"\$f\" | head -n1); if test \"\$FILE_VPS_WG_PORT\" = '$VPS_WG_PORT'; then echo VPS_WG_PORT:\$FILE_NODE; fi; if test \"\$FILE_WG_PREFIX\" = '$WG_PREFIX'; then echo WG_PREFIX:\$FILE_NODE; fi; if test '$MODE' = relay && test \"\$FILE_MODE\" = relay && test \"\$FILE_VPS_SS_PORT\" = '$VPS_SS_PORT'; then echo VPS_SS_PORT:\$FILE_NODE; fi; done" 2>/dev/null || true)"
 [[ -z "$collision" ]] || die "端口或网段与已有节点冲突：$collision"
 
+cat >"$TMP_DIR/install-ssserver" <<'SSINSTALL'
+#!/bin/sh
+set -eu
+
+version="__SS_RUST_VERSION__"
+
+download_file() {
+  url=$1
+  output=$2
+  if command -v curl >/dev/null 2>&1; then
+    curl -fL --retry 3 -o "$output" "$url"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -O "$output" "$url"
+  else
+    echo "缺少 curl/wget，无法下载 shadowsocks-rust" >&2
+    exit 1
+  fi
+}
+
+install_release() {
+  target=$1
+  archive="shadowsocks-${version}.${target}.tar.xz"
+  base_url="https://github.com/shadowsocks/shadowsocks-rust/releases/download/${version}"
+  work_dir="$(mktemp -d)"
+  trap 'rm -rf "$work_dir"' EXIT
+  download_file "$base_url/$archive" "$work_dir/$archive"
+  download_file "$base_url/$archive.sha256" "$work_dir/$archive.sha256"
+  (cd "$work_dir" && sha256sum -c "$archive.sha256")
+  tar -xJf "$work_dir/$archive" -C "$work_dir" ssserver
+  install -m 755 "$work_dir/ssserver" /usr/local/bin/ssserver
+  rm -rf "$work_dir"
+  trap - EXIT
+}
+
+if command -v ssserver >/dev/null 2>&1; then
+  exit 0
+fi
+
+machine="$(uname -m)"
+if command -v opkg >/dev/null 2>&1; then
+  opkg update >/dev/null 2>&1 || true
+  if opkg install shadowsocks-rust-ssserver >/dev/null 2>&1 && command -v ssserver >/dev/null 2>&1; then
+    exit 0
+  fi
+  opkg install ca-bundle curl xz >/dev/null 2>&1 || opkg install ca-bundle curl xz-utils >/dev/null 2>&1 || true
+  case "$machine" in
+    x86_64) target="x86_64-unknown-linux-musl" ;;
+    aarch64) target="aarch64-unknown-linux-musl" ;;
+    armv7l) target="armv7-unknown-linux-musleabihf" ;;
+    armv6l|armv5*) target="arm-unknown-linux-musleabi" ;;
+    i386|i486|i586|i686) target="i686-unknown-linux-musl" ;;
+    riscv64) target="riscv64gc-unknown-linux-musl" ;;
+    *)
+      echo "当前 OpenWrt 架构 $machine 的软件源没有 ssserver，官方也没有可用的静态包；请改选 --home-backend xray" >&2
+      exit 1
+      ;;
+  esac
+  install_release "$target"
+else
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update >/dev/null
+  apt-get install -y ca-certificates curl xz-utils >/dev/null
+  case "$machine" in
+    x86_64) target="x86_64-unknown-linux-gnu" ;;
+    aarch64) target="aarch64-unknown-linux-gnu" ;;
+    armv7l) target="armv7-unknown-linux-gnueabihf" ;;
+    armv6l|armv5*) target="arm-unknown-linux-gnueabi" ;;
+    i386|i486|i586|i686) target="i686-unknown-linux-musl" ;;
+    riscv64) target="riscv64gc-unknown-linux-gnu" ;;
+    loongarch64) target="loongarch64-unknown-linux-gnu" ;;
+    *) echo "不支持自动安装 ssserver 的架构：$machine" >&2; exit 1 ;;
+  esac
+  install_release "$target"
+fi
+
+command -v ssserver >/dev/null 2>&1
+ssserver --version
+SSINSTALL
+sed -i "s/__SS_RUST_VERSION__/$SS_RUST_VERSION/" "$TMP_DIR/install-ssserver"
+chmod 700 "$TMP_DIR/install-ssserver"
+
 echo "[2/8] 安装 WireGuard 工具"
 ssh_vps "export DEBIAN_FRONTEND=noninteractive; apt-get update >/dev/null; apt-get install -y wireguard-tools nftables >/dev/null"
 openwrt_had_wg="1"
@@ -358,15 +470,24 @@ if [[ "$home_kind" == "openwrt" ]]; then
     openwrt_had_wg="0"
     ssh_openwrt "opkg update >/dev/null && opkg install wireguard-tools >/dev/null"
   fi
-  if ! ssh_openwrt "command -v xray >/dev/null"; then
+  if [[ "$HOME_BACKEND" == "xray" ]] && ! ssh_openwrt "command -v xray >/dev/null"; then
     ssh_openwrt "opkg update >/dev/null && opkg install xray-core >/dev/null"
   fi
 else
-  ssh_openwrt "export DEBIAN_FRONTEND=noninteractive; apt-get update >/dev/null; apt-get install -y wireguard-tools nftables iptables curl unzip ca-certificates >/dev/null"
-  ssh_openwrt 'set -eu; if ! command -v xray >/dev/null 2>&1 && test ! -x /usr/local/bin/xray; then curl -fL --retry 3 -o /tmp/xray-install-release.sh https://github.com/XTLS/Xray-install/raw/main/install-release.sh; bash /tmp/xray-install-release.sh install --without-geodata; rm -f /tmp/xray-install-release.sh; systemctl disable --now xray.service >/dev/null 2>&1 || true; fi'
+  ssh_openwrt "export DEBIAN_FRONTEND=noninteractive; apt-get update >/dev/null; apt-get install -y wireguard-tools nftables iptables ca-certificates >/dev/null"
+  if [[ "$HOME_BACKEND" == "xray" ]]; then
+    ssh_openwrt "export DEBIAN_FRONTEND=noninteractive; apt-get install -y curl unzip >/dev/null"
+    ssh_openwrt 'set -eu; if ! command -v xray >/dev/null 2>&1 && test ! -x /usr/local/bin/xray; then curl -fL --retry 3 -o /tmp/xray-install-release.sh https://github.com/XTLS/Xray-install/raw/main/install-release.sh; bash /tmp/xray-install-release.sh install --without-geodata; rm -f /tmp/xray-install-release.sh; systemctl disable --now xray.service >/dev/null 2>&1 || true; fi'
+  fi
 fi
 ssh_openwrt "command -v wg >/dev/null" || die "家宽端 wireguard-tools 安装失败"
-ssh_openwrt "command -v xray >/dev/null || test -x /usr/local/bin/xray" || die "家宽端 Xray Core 安装失败"
+if [[ "$HOME_BACKEND" == "ss-rust" ]]; then
+  scp_openwrt "$TMP_DIR/install-ssserver" /tmp/volwg-install-ssserver
+  ssh_openwrt "set -eu; chmod 700 /tmp/volwg-install-ssserver; /tmp/volwg-install-ssserver; rm -f /tmp/volwg-install-ssserver"
+  ssh_openwrt "command -v ssserver >/dev/null || test -x /usr/local/bin/ssserver" || die "家宽端 ss-rust ssserver 安装失败"
+else
+  ssh_openwrt "command -v xray >/dev/null || test -x /usr/local/bin/xray" || die "家宽端 Xray Core 安装失败"
+fi
 
 if [[ "$REPLACE_NODE" != "1" ]]; then
   used_wg_iface="$(ssh_vps "for iface in \$(wg show interfaces 2>/dev/null); do test \"\$iface\" = '$WG_IFACE' && continue; test \"\$(wg show \"\$iface\" listen-port 2>/dev/null)\" = '$VPS_WG_PORT' && echo \"\$iface\"; done" || true)"
@@ -386,13 +507,6 @@ else
   openwrt_public_key="$(ssh_openwrt "set -eu; install -d -m 700 /etc/wireguard; umask 077; test -s '/etc/wireguard/$WG_IFACE.key' || wg genkey > '/etc/wireguard/$WG_IFACE.key'; wg pubkey < '/etc/wireguard/$WG_IFACE.key' > '/etc/wireguard/$WG_IFACE.pub'; cat '/etc/wireguard/$WG_IFACE.pub'")"
 fi
 [[ -n "$vps_public_key" && -n "$openwrt_public_key" ]] || die "生成 WireGuard 公钥失败"
-
-TMP_DIR="$(mktemp -d)"
-chmod 700 "$TMP_DIR"
-cleanup() {
-  rm -rf -- "$TMP_DIR"
-}
-trap cleanup EXIT
 
 ss_password="$(openssl rand -base64 16 | tr -d '\r\n')"
 [[ -n "$ss_password" ]] || die "生成 SS2022 密钥失败"
@@ -455,6 +569,37 @@ start_service() {
 EOF
 chmod 700 "$TMP_DIR/openwrt-xray-init"
 
+cat >"$TMP_DIR/ssrust-config.json" <<EOF
+{
+  "server": "$WG_PREFIX.2",
+  "server_port": $HOME_SS_PORT,
+  "password": "$ss_password",
+  "method": "2022-blake3-aes-128-gcm",
+  "mode": "tcp_and_udp",
+  "timeout": 300
+}
+EOF
+chmod 600 "$TMP_DIR/ssrust-config.json"
+
+cat >"$TMP_DIR/openwrt-ssrust-init" <<EOF
+#!/bin/sh /etc/rc.common
+
+START=99
+STOP=10
+USE_PROCD=1
+
+start_service() {
+  procd_open_instance
+  procd_set_param command /usr/local/bin/wg-home-ssserver -c /etc/ss-rust-wg-home/$NODE_ID/config.json
+  procd_set_param respawn 3600 5 5
+  procd_set_param limits nofile="1048576 1048576"
+  procd_set_param stdout 1
+  procd_set_param stderr 1
+  procd_close_instance
+}
+EOF
+chmod 700 "$TMP_DIR/openwrt-ssrust-init"
+
 cat >"$TMP_DIR/home-wg.conf" <<EOF
 [Interface]
 Address = $WG_PREFIX.2/24
@@ -478,6 +623,23 @@ After=network-online.target wg-quick@$WG_IFACE.service
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/wg-home-xray-core run -c /etc/xray-wg-home/$NODE_ID/config.json
+Restart=always
+RestartSec=3
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+cat >"$TMP_DIR/home-ssrust.service" <<EOF
+[Unit]
+Description=ss-rust SS2022 home exit $NODE_ID over WireGuard
+Requires=wg-quick@$WG_IFACE.service
+After=network-online.target wg-quick@$WG_IFACE.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/wg-home-ssserver -c /etc/ss-rust-wg-home/$NODE_ID/config.json
 Restart=always
 RestartSec=3
 LimitNOFILE=1048576
@@ -526,23 +688,46 @@ scp_vps "$TMP_DIR/wg-home.conf" /tmp/wg-home.conf
 ssh_vps "set -eu; VPS_PRIVATE_KEY=\$(cat '/etc/wireguard/$WG_IFACE.key'); sed -i \"s|__VPS_PRIVATE_KEY__|\$VPS_PRIVATE_KEY|\" /tmp/wg-home.conf; install -m 600 /tmp/wg-home.conf '/etc/wireguard/$WG_IFACE.conf'; rm -f /tmp/wg-home.conf; systemctl enable 'wg-quick@$WG_IFACE.service' >/dev/null; systemctl restart 'wg-quick@$WG_IFACE.service'"
 
 echo "[5/8] 配置家宽端 WireGuard、Firewall 和 SS2022"
-scp_openwrt "$TMP_DIR/openwrt-xray.json" /tmp/wg-home-xray.json
+if [[ "$HOME_BACKEND" == "ss-rust" ]]; then
+  backend_config="$TMP_DIR/ssrust-config.json"
+  openwrt_backend_init="$TMP_DIR/openwrt-ssrust-init"
+  linux_backend_service="$TMP_DIR/home-ssrust.service"
+else
+  backend_config="$TMP_DIR/openwrt-xray.json"
+  openwrt_backend_init="$TMP_DIR/openwrt-xray-init"
+  linux_backend_service="$TMP_DIR/home-xray.service"
+fi
+scp_openwrt "$backend_config" /tmp/wg-home-backend.json
 if [[ "$home_kind" == "openwrt" ]]; then
-  scp_openwrt "$TMP_DIR/openwrt-xray-init" /tmp/wg-home-xray-init
+  scp_openwrt "$openwrt_backend_init" /tmp/wg-home-backend-init
   ssh_openwrt "set -eu
 STAMP=\$(date +%Y%m%d-%H%M%S)
 cp /etc/config/network /etc/config/network.before-wghome.\$STAMP
 cp /etc/config/firewall /etc/config/firewall.before-wghome.\$STAMP
-XRAY_BIN=\$(command -v xray || true)
-test -n \"\$XRAY_BIN\" || { echo 'OpenWrt 缺少 Xray Core' >&2; exit 1; }
-mkdir -p '/etc/xray-wg-home/$NODE_ID'
-chmod 700 /etc/xray-wg-home
-cp /tmp/wg-home-xray.json '/etc/xray-wg-home/$NODE_ID/config.json'
-chmod 600 '/etc/xray-wg-home/$NODE_ID/config.json'
-cp /tmp/wg-home-xray-init '/etc/init.d/$XRAY_SERVICE'
-chmod 755 '/etc/init.d/$XRAY_SERVICE'
-ln -sf \"\$XRAY_BIN\" /usr/local/bin/wg-home-xray-core
-rm -f /tmp/wg-home-xray.json /tmp/wg-home-xray-init
+if test '$HOME_BACKEND' = ss-rust; then
+  SS_BIN=\$(command -v ssserver || true)
+  test -n \"\$SS_BIN\" || SS_BIN=/usr/local/bin/ssserver
+  test -x \"\$SS_BIN\" || { echo 'OpenWrt 缺少 ss-rust ssserver' >&2; exit 1; }
+  mkdir -p '/etc/ss-rust-wg-home/$NODE_ID'
+  chmod 700 /etc/ss-rust-wg-home
+  cp /tmp/wg-home-backend.json '/etc/ss-rust-wg-home/$NODE_ID/config.json'
+  chmod 600 '/etc/ss-rust-wg-home/$NODE_ID/config.json'
+  ln -sf \"\$SS_BIN\" /usr/local/bin/wg-home-ssserver
+  test ! -x '/etc/init.d/$XRAY_SERVICE' || { '/etc/init.d/$XRAY_SERVICE' stop >/dev/null 2>&1 || true; '/etc/init.d/$XRAY_SERVICE' disable >/dev/null 2>&1 || true; }
+else
+  XRAY_BIN=\$(command -v xray || true)
+  test -n \"\$XRAY_BIN\" || { echo 'OpenWrt 缺少 Xray Core' >&2; exit 1; }
+  mkdir -p '/etc/xray-wg-home/$NODE_ID'
+  chmod 700 /etc/xray-wg-home
+  cp /tmp/wg-home-backend.json '/etc/xray-wg-home/$NODE_ID/config.json'
+  chmod 600 '/etc/xray-wg-home/$NODE_ID/config.json'
+  ln -sf \"\$XRAY_BIN\" /usr/local/bin/wg-home-xray-core
+  /usr/local/bin/wg-home-xray-core run -test -c '/etc/xray-wg-home/$NODE_ID/config.json'
+  test ! -x '/etc/init.d/$SS_RUST_SERVICE' || { '/etc/init.d/$SS_RUST_SERVICE' stop >/dev/null 2>&1 || true; '/etc/init.d/$SS_RUST_SERVICE' disable >/dev/null 2>&1 || true; }
+fi
+cp /tmp/wg-home-backend-init '/etc/init.d/$HOME_SERVICE'
+chmod 755 '/etc/init.d/$HOME_SERVICE'
+rm -f /tmp/wg-home-backend.json /tmp/wg-home-backend-init
 OPENWRT_PRIVATE_KEY=\$(cat '/etc/wireguard/$WG_IFACE.key')
 uci -q delete 'network.$WG_IFACE' || true
 uci -q delete 'network.${WG_IFACE}_vps' || true
@@ -567,8 +752,7 @@ uci set 'firewall.fw_$NODE_ID.input=ACCEPT'
 uci set 'firewall.fw_$NODE_ID.output=ACCEPT'
 uci set 'firewall.fw_$NODE_ID.forward=REJECT'
 uci commit firewall
-/usr/local/bin/wg-home-xray-core run -test -c '/etc/xray-wg-home/$NODE_ID/config.json'
-'/etc/init.d/$XRAY_SERVICE' enable"
+'/etc/init.d/$HOME_SERVICE' enable"
 
   if [[ "$openwrt_had_wg" == "0" ]]; then
     echo "OpenWrt 首次安装 WireGuard，正在重启 network；SSH 短暂断开属于正常现象。"
@@ -578,40 +762,52 @@ uci commit firewall
     ssh_openwrt "/etc/init.d/network reload; sleep 2; ifup '$WG_IFACE'"
   fi
 
-  ssh_openwrt "/etc/init.d/firewall reload >/dev/null 2>&1 || /etc/init.d/firewall restart; '/etc/init.d/$XRAY_SERVICE' restart || '/etc/init.d/$XRAY_SERVICE' start"
+  ssh_openwrt "/etc/init.d/firewall reload >/dev/null 2>&1 || /etc/init.d/firewall restart; '/etc/init.d/$HOME_SERVICE' restart || '/etc/init.d/$HOME_SERVICE' start"
 else
   scp_openwrt "$TMP_DIR/home-wg.conf" /tmp/home-wg.conf
-  scp_openwrt "$TMP_DIR/home-xray.service" "/tmp/$XRAY_SERVICE.service"
+  scp_openwrt "$linux_backend_service" /tmp/wg-home-backend.service
   scp_openwrt "$TMP_DIR/home-input-firewall" "/tmp/wgh-input-$NODE_ID"
   scp_openwrt "$TMP_DIR/home-input-firewall.service" "/tmp/wgh-input-$NODE_ID.service"
   ssh_openwrt "set -eu
 STAMP=\$(date +%Y%m%d-%H%M%S)
-systemctl stop '$XRAY_SERVICE.service' >/dev/null 2>&1 || true
+systemctl disable --now '$XRAY_SERVICE.service' >/dev/null 2>&1 || true
+systemctl disable --now '$SS_RUST_SERVICE.service' >/dev/null 2>&1 || true
 systemctl stop 'wgh-input-$NODE_ID.service' >/dev/null 2>&1 || true
 test ! -f '/etc/wireguard/$WG_IFACE.conf' || cp '/etc/wireguard/$WG_IFACE.conf' '/etc/wireguard/$WG_IFACE.conf.before.'\$STAMP
 test ! -f '/etc/xray-wg-home/$NODE_ID/config.json' || cp '/etc/xray-wg-home/$NODE_ID/config.json' '/etc/xray-wg-home/$NODE_ID/config.json.before.'\$STAMP
+test ! -f '/etc/ss-rust-wg-home/$NODE_ID/config.json' || cp '/etc/ss-rust-wg-home/$NODE_ID/config.json' '/etc/ss-rust-wg-home/$NODE_ID/config.json.before.'\$STAMP
 HOME_PRIVATE_KEY=\$(cat '/etc/wireguard/$WG_IFACE.key')
 sed -i \"s|__HOME_PRIVATE_KEY__|\$HOME_PRIVATE_KEY|\" /tmp/home-wg.conf
 install -m 600 /tmp/home-wg.conf '/etc/wireguard/$WG_IFACE.conf'
-mkdir -p '/etc/xray-wg-home/$NODE_ID'
-chmod 700 /etc/xray-wg-home
-install -m 600 /tmp/wg-home-xray.json '/etc/xray-wg-home/$NODE_ID/config.json'
-XRAY_BIN=\$(command -v xray || true)
-test -n \"\$XRAY_BIN\" || XRAY_BIN=/usr/local/bin/xray
-test -x \"\$XRAY_BIN\"
-ln -sf \"\$XRAY_BIN\" /usr/local/bin/wg-home-xray-core
-/usr/local/bin/wg-home-xray-core run -test -c '/etc/xray-wg-home/$NODE_ID/config.json'
-install -m 644 '/tmp/$XRAY_SERVICE.service' '/etc/systemd/system/$XRAY_SERVICE.service'
+if test '$HOME_BACKEND' = ss-rust; then
+  mkdir -p '/etc/ss-rust-wg-home/$NODE_ID'
+  chmod 700 /etc/ss-rust-wg-home
+  install -m 600 /tmp/wg-home-backend.json '/etc/ss-rust-wg-home/$NODE_ID/config.json'
+  SS_BIN=\$(command -v ssserver || true)
+  test -n \"\$SS_BIN\" || SS_BIN=/usr/local/bin/ssserver
+  test -x \"\$SS_BIN\"
+  ln -sf \"\$SS_BIN\" /usr/local/bin/wg-home-ssserver
+else
+  mkdir -p '/etc/xray-wg-home/$NODE_ID'
+  chmod 700 /etc/xray-wg-home
+  install -m 600 /tmp/wg-home-backend.json '/etc/xray-wg-home/$NODE_ID/config.json'
+  XRAY_BIN=\$(command -v xray || true)
+  test -n \"\$XRAY_BIN\" || XRAY_BIN=/usr/local/bin/xray
+  test -x \"\$XRAY_BIN\"
+  ln -sf \"\$XRAY_BIN\" /usr/local/bin/wg-home-xray-core
+  /usr/local/bin/wg-home-xray-core run -test -c '/etc/xray-wg-home/$NODE_ID/config.json'
+fi
+install -m 644 /tmp/wg-home-backend.service '/etc/systemd/system/$HOME_SERVICE.service'
 install -m 700 '/tmp/wgh-input-$NODE_ID' '/usr/local/sbin/wgh-input-$NODE_ID'
 install -m 644 '/tmp/wgh-input-$NODE_ID.service' '/etc/systemd/system/wgh-input-$NODE_ID.service'
-rm -f /tmp/home-wg.conf /tmp/wg-home-xray.json '/tmp/$XRAY_SERVICE.service' '/tmp/wgh-input-$NODE_ID' '/tmp/wgh-input-$NODE_ID.service'
+rm -f /tmp/home-wg.conf /tmp/wg-home-backend.json /tmp/wg-home-backend.service '/tmp/wgh-input-$NODE_ID' '/tmp/wgh-input-$NODE_ID.service'
 systemctl daemon-reload
 systemctl enable 'wg-quick@$WG_IFACE.service' >/dev/null
 systemctl enable 'wgh-input-$NODE_ID.service' >/dev/null
-systemctl enable '$XRAY_SERVICE.service' >/dev/null
+systemctl enable '$HOME_SERVICE.service' >/dev/null
 systemctl restart 'wg-quick@$WG_IFACE.service'
 systemctl restart 'wgh-input-$NODE_ID.service'
-systemctl restart '$XRAY_SERVICE.service'"
+systemctl restart '$HOME_SERVICE.service'"
 fi
 
 echo "[6/8] 配置数据路径"
@@ -677,9 +873,9 @@ sleep 3
 ssh_openwrt "ping -c 2 -W 2 '$WG_PREFIX.1' >/dev/null" || die "家宽端无法通过 WireGuard ping VPS；检查 VPS UDP $VPS_WG_PORT 防火墙"
 ssh_vps "ping -c 2 -W 2 '$WG_PREFIX.2' >/dev/null" || die "VPS 无法通过 WireGuard ping 家宽端"
 if [[ "$home_kind" == "openwrt" ]]; then
-  ssh_openwrt "ubus call service list '{\"name\":\"$XRAY_SERVICE\"}' | grep -q '\"running\": true'" || die "家宽端 SS2022 服务未运行"
+  ssh_openwrt "ubus call service list '{\"name\":\"$HOME_SERVICE\"}' | grep -q '\"running\": true'" || die "家宽端 $HOME_BACKEND SS2022 服务未运行"
 else
-  ssh_openwrt "systemctl is-active --quiet '$XRAY_SERVICE.service'" || die "家宽端 SS2022 服务未运行"
+  ssh_openwrt "systemctl is-active --quiet '$HOME_SERVICE.service'" || die "家宽端 $HOME_BACKEND SS2022 服务未运行"
 fi
 
 echo "[8/8] 登记线路并完成"
@@ -713,6 +909,7 @@ cat >"$TMP_DIR/node.conf" <<EOF
 NODE_ID=$NODE_ID
 DISPLAY_NAME_B64=$(base64_value "$DISPLAY_NAME")
 MODE=$MODE
+HOME_BACKEND=$HOME_BACKEND
 WG_INTERFACE=$WG_IFACE
 WG_PORT=$VPS_WG_PORT
 VPS_WG_PORT=$VPS_WG_PORT
@@ -738,6 +935,7 @@ ssh_vps "set -eu; install -d -m 755 /usr/local/lib/volwg /usr/local/bin; install
 echo
 echo "线路名称：$DISPLAY_NAME"
 echo "节点 ID：$NODE_ID"
+echo "家宽服务端：$HOME_BACKEND"
 echo "加密方式：2022-blake3-aes-128-gcm"
 echo "密码：$ss_password"
 echo "SS 地址：$ss_endpoint"

@@ -117,19 +117,21 @@ legacy_notice() {
 }
 
 list_nodes() {
-  local file id name mode iface endpoint status found=0
-  printf '%-10s %-24s %-8s %-18s %-22s %s\n' "节点ID" "线路名称" "模式" "WG接口" "SS地址" "状态"
-  printf '%-10s %-24s %-8s %-18s %-22s %s\n' "----------" "------------------------" "--------" "------------------" "----------------------" "----------"
+  local file id name mode backend iface endpoint status found=0
+  printf '%-10s %-24s %-8s %-9s %-18s %-22s %s\n' "节点ID" "线路名称" "模式" "服务端" "WG接口" "SS地址" "状态"
+  printf '%-10s %-24s %-8s %-9s %-18s %-22s %s\n' "----------" "------------------------" "--------" "---------" "------------------" "----------------------" "----------"
   shopt -s nullglob
   for file in "$STATE_DIR"/*.conf; do
     found=1
     id="$(field "$file" NODE_ID)"
     name="$(decode "$(field "$file" DISPLAY_NAME_B64)")"
     mode="$(field "$file" MODE)"
+    backend="$(field "$file" HOME_BACKEND)"
+    backend="${backend:-xray}"
     iface="$(field "$file" WG_INTERFACE)"
     endpoint="$(field "$file" SS_ENDPOINT)"
     status="$(node_status "$iface")"
-    printf '%-10s %-24.24s %-8s %-18s %-22s %s\n' "$id" "$name" "$mode" "$iface" "$endpoint" "$status"
+    printf '%-10s %-24.24s %-8s %-9s %-18s %-22s %s\n' "$id" "$name" "$mode" "$backend" "$iface" "$endpoint" "$status"
   done
   if ((found == 0)) && [[ -f /etc/wireguard/wg-home.conf ]]; then
     mode="direct"
@@ -139,7 +141,7 @@ list_nodes() {
       endpoint="$(nft list table ip wg_home 2>/dev/null | sed -n 's/.*dnat to \([^ ]*\).*/\1/p' | head -n 1)"
       endpoint="${endpoint:-未保存}"
     fi
-    printf '%-10s %-24.24s %-8s %-18s %-22s %s\n' "legacy" "旧版未登记线路" "$mode" "wg-home" "$endpoint" "$(node_status wg-home)"
+    printf '%-10s %-24.24s %-8s %-9s %-18s %-22s %s\n' "legacy" "旧版未登记线路" "$mode" "xray" "wg-home" "$endpoint" "$(node_status wg-home)"
     found=1
   fi
   ((found == 1)) || echo "尚未登记线路。"
@@ -169,10 +171,12 @@ list_links() {
 }
 
 show_node() {
-  local file="$1" id name mode iface vps_wg_port home_wg_port prefix vps_ss_port home_ss_port endpoint link outbound
+  local file="$1" id name mode backend iface vps_wg_port home_wg_port prefix vps_ss_port home_ss_port endpoint link outbound
   id="$(field "$file" NODE_ID)"
   name="$(decode "$(field "$file" DISPLAY_NAME_B64)")"
   mode="$(field "$file" MODE)"
+  backend="$(field "$file" HOME_BACKEND)"
+  backend="${backend:-xray}"
   iface="$(field "$file" WG_INTERFACE)"
   vps_wg_port="$(field_fallback "$file" VPS_WG_PORT WG_PORT)"
   home_wg_port="$(field_fallback "$file" HOME_WG_PORT WG_PORT)"
@@ -186,6 +190,7 @@ show_node() {
   echo "线路名称：$name"
   echo "节点 ID：$id"
   echo "模式：$mode"
+  echo "家宽服务端：$backend"
   echo "WireGuard：${iface}，${prefix}.1 ↔ ${prefix}.2"
   echo "  VPS 公网 UDP：${vps_wg_port:-未记录}"
   echo "  家宽机本地 UDP：${home_wg_port:-未记录}"
@@ -274,7 +279,7 @@ rename_node() {
 }
 
 register_node() {
-  local node_id name mode iface wg_port home_wg_port prefix endpoint endpoint_port vps_ss_port home_ss_port link outbound answer file
+  local node_id name mode backend iface wg_port home_wg_port prefix endpoint endpoint_port vps_ss_port home_ss_port link outbound answer file
   [[ "$(id -u)" == "0" ]] || die "登记线路需要 root，请使用 sudo"
   read -r -p "节点 ID（1-8 位小写字母/数字/_）：" node_id
   [[ "$node_id" =~ ^[a-z0-9][a-z0-9_]{0,7}$ ]] || die "节点 ID 无效"
@@ -283,6 +288,9 @@ register_node() {
   read -r -p "模式 relay/direct [relay]：" mode
   mode="${mode:-relay}"
   [[ "$mode" == "relay" || "$mode" == "direct" ]] || die "模式无效"
+  read -r -p "家宽服务端 ss-rust/xray [xray]：" backend
+  backend="${backend:-xray}"
+  [[ "$backend" == "ss-rust" || "$backend" == "xray" ]] || die "家宽服务端无效"
   read -r -p "WireGuard 接口 [wg-home]：" iface
   iface="${iface:-wg-home}"
   [[ "$iface" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,14}$ ]] || die "WireGuard 接口名无效"
@@ -327,6 +335,7 @@ register_node() {
 NODE_ID=$node_id
 DISPLAY_NAME_B64=$(encode "$name")
 MODE=$mode
+HOME_BACKEND=$backend
 WG_INTERFACE=$iface
 WG_PORT=$wg_port
 VPS_WG_PORT=$wg_port

@@ -54,7 +54,21 @@ root 用户安装到 `/usr/local/bin/volwg`；OpenWrt root 安装到 `/usr/bin/v
 - Ubuntu
 - 必须拥有 root/SSH
 
-脚本会自动安装 WireGuard。家宽端缺少 Xray Core 时也会自动安装；Linux 使用 XTLS 官方 Xray 安装器。
+脚本会自动安装 WireGuard，并允许在家宽端选择 `ss-rust ssserver` 或 Xray Core。默认推荐轻量的 `ss-rust`；选择 Xray 时，Linux 使用 XTLS 官方安装器。
+
+## 家宽服务端选择
+
+全自动向导会询问家宽机的 SS2022 服务端后端：
+
+    1) ss-rust ssserver（推荐，轻量）
+    2) Xray Core（兼容模式）
+
+命令行可以使用：
+
+    --home-backend ss-rust
+    --home-backend xray
+
+线路机仍然使用 Xray Shadowsocks outbound；只有家宽机安装所选服务端。relay VPS 只运行 WireGuard 与 nftables，不需要安装 ss-rust 或 Xray。两种后端使用相同的 SS2022 协议、AES-128 密钥和 `ss://` 链接格式。
 
 ## 两种链路
 
@@ -116,6 +130,7 @@ root 用户安装到 `/usr/local/bin/volwg`；OpenWrt root 安装到 `/usr/bin/v
       --home root@home-a.example.net \
       --vps-wg-port 51830 --home-wg-port 45000 \
       --vps-ss-port 31001 --home-ss-port 32001 \
+      --home-backend ss-rust \
       --wg-prefix 10.88.1
 
 第二条家宽线路：
@@ -126,6 +141,7 @@ root 用户安装到 `/usr/local/bin/volwg`；OpenWrt root 安装到 `/usr/bin/v
       --home root@home-b.example.net \
       --vps-wg-port 51831 --home-wg-port 45001 \
       --vps-ss-port 31002 --home-ss-port 32002 \
+      --home-backend ss-rust \
       --wg-prefix 10.88.2
 
 部署完成后，登录 VPS 使用管理后台：
@@ -220,6 +236,7 @@ SSH 可能短暂断开，重新连接后使用以下命令检查：
       --home-ssh-port 1090 \
       --vps-wg-port 51830 --home-wg-port 45000 \
       --vps-ss-port 31000 --home-ss-port 32000 \
+      --home-backend ss-rust \
       --identity ~/.ssh/id_ed25519
 
 优化机直连：
@@ -231,6 +248,7 @@ SSH 可能短暂断开，重新连接后使用以下命令检查：
       --home root@home-b.example.net \
       --vps-wg-port 51831 --home-wg-port 45001 \
       --home-ss-port 32001 \
+      --home-backend ss-rust \
       --identity ~/.ssh/id_ed25519
 
 查看所有参数：
@@ -241,6 +259,7 @@ SSH 可能短暂断开，重新连接后使用以下命令检查：
 
 - 节点 ID：home1（1-8 位小写字母、数字或下划线）
 - 线路显示名称：家宽线路 1
+- 家宽服务端：ss-rust（可选 xray）
 
 - WireGuard 网段：10.88.0.0/24
 - VPS 隧道地址：10.88.0.1
@@ -273,7 +292,7 @@ relay 模式允许两端 SS 使用不同端口，例如公网访问 VPS `31000`�
 - SSH 密钥：仅用于部署脚本登录设备。
 - WireGuard 私钥：每台机器本地生成，不会传给另一端。
 - WireGuard 公钥：可以在两个 SSH 窗口之间复制粘贴。
-- SS2022 密钥：写入家宽 Xray 服务端，并输出到 SS 链接或优化机 outbound。
+- SS2022 密钥：写入家宽机所选的 ss-rust/Xray 服务端，并输出到 SS 链接或优化机 outbound。
 
 SS2022、SSH 私钥和 WireGuard 私钥均属于敏感信息，不要公开。
 
@@ -289,6 +308,7 @@ SS2022、SSH 私钥和 WireGuard 私钥均属于敏感信息，不要公开。
 ## 注意
 
 - 家宽端可以位于 NAT/CGNAT 后面，因为它主动连接 VPS。
+- OpenWrt 会优先从软件源安装 `shadowsocks-rust-ssserver`；若架构没有可用包，可以改选 Xray 后端。
 - 更换家宽公网 IP 后节点参数不变，WireGuard 会自动重新握手。
 - 家宽网络必须允许连接 VPS 的 WireGuard UDP 端口。
 - OpenWrt 会备份 /etc/config/network 和 /etc/config/firewall。
