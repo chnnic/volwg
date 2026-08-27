@@ -239,7 +239,7 @@ SSH 可能短暂断开，重新连接后使用以下命令检查：
 - 家宽端隧道地址：10.88.0.2
 - WireGuard：51830/UDP
 - SS2022：31000/TCP+UDP
-- SS2022 加密：2022-blake3-aes-256-gcm
+- SS2022 加密：2022-blake3-aes-128-gcm（16 字节密钥）
 - PersistentKeepalive：25 秒
 
 可通过 --node、--name、--wg-prefix、--wg-port 和 --ss-port 修改。脚本会检查已登记节点的端口和网段冲突；同一节点 ID 默认禁止覆盖，确认需要更新时使用 `--replace`。

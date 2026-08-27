@@ -363,7 +363,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-ss_password="$(openssl rand -base64 32 | tr -d '\r\n')"
+ss_password="$(openssl rand -base64 16 | tr -d '\r\n')"
 [[ -n "$ss_password" ]] || die "生成 SS2022 密钥失败"
 
 cat >"$TMP_DIR/wg-home.conf" <<EOF
@@ -391,7 +391,7 @@ cat >"$TMP_DIR/openwrt-xray.json" <<EOF
       "protocol": "shadowsocks",
       "settings": {
         "network": "tcp,udp",
-        "method": "2022-blake3-aes-256-gcm",
+        "method": "2022-blake3-aes-128-gcm",
         "password": "$ss_password"
       }
     }
@@ -657,7 +657,7 @@ else
   ss_host="$WG_PREFIX.2"
 fi
 ss_endpoint="$ss_host:$SS_PORT"
-ss_userinfo="$(base64url_value "2022-blake3-aes-256-gcm:$ss_password")"
+ss_userinfo="$(base64url_value "2022-blake3-aes-128-gcm:$ss_password")"
 encoded_name="$(urlencode "$DISPLAY_NAME")"
 ss_link="ss://$ss_userinfo@$ss_endpoint#$encoded_name"
 
@@ -668,7 +668,7 @@ cat >"$TMP_DIR/xray-outbound.json" <<EOF
   "settings": {
     "address": "$ss_host",
     "port": $SS_PORT,
-    "method": "2022-blake3-aes-256-gcm",
+    "method": "2022-blake3-aes-128-gcm",
     "password": "$ss_password"
   }
 }
@@ -699,7 +699,7 @@ ssh_vps "set -eu; install -d -m 755 /usr/local/lib/volwg /usr/local/bin; install
 echo
 echo "线路名称：$DISPLAY_NAME"
 echo "节点 ID：$NODE_ID"
-echo "加密方式：2022-blake3-aes-256-gcm"
+echo "加密方式：2022-blake3-aes-128-gcm"
 echo "密码：$ss_password"
 echo "SS 地址：$ss_endpoint"
 echo "SS2022 链接："
@@ -721,7 +721,7 @@ cat <<EOF
       {
         "address": "$ss_host",
         "port": $SS_PORT,
-        "method": "2022-blake3-aes-256-gcm",
+        "method": "2022-blake3-aes-128-gcm",
         "password": "$ss_password"
       }
     ]
