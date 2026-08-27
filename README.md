@@ -135,8 +135,23 @@ root 用户安装到 `/usr/local/bin/volwg`；OpenWrt root 安装到 `/usr/bin/v
     sudo volwg manager show jkt1
     sudo volwg manager status
     sudo volwg manager rename jkt1 "印尼雅加达二号线"
+    sudo volwg manager node jkt1
 
 `links` 会按自定义线路名称分别显示 SS 链接。relay 显示公网可用链接；direct 显示 WireGuard 私网链接和 Xray outbound，仅供对应 VPS 使用。
+
+`node` 专门用于导入图形化 Xray 客户端或面板，一次输出三种内容：
+
+- 标准 `ss://` 导入链接。
+- Xray outbound JSON。
+- 将指定入站指向该节点的 routing 规则。
+
+也可以只输出需要的格式：
+
+    volwg manager node jkt1 ss
+    volwg manager node jkt1 xray
+    volwg manager node jkt1 routing
+
+relay 节点的 `ss://` 链接可以从公网访问；direct 节点包含 WireGuard 私网地址，只能导入到已经连接对应隧道的优化 VPS/Xray，不能直接用于普通公网客户端。
 
 旧版本已经部署好的线路不会被自动覆盖。可以运行下面的命令，将旧 SS 链接粘贴登记到管理后台，并重新设置易于区分的名称：
 

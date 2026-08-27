@@ -30,6 +30,7 @@ usage() {
   volwg manager links            查看所有线路的 SS 链接
   volwg manager show 节点ID      查看单条线路详情
   volwg manager status           查看 WireGuard 握手状态
+  volwg manager node ID [格式]   生成图形化 Xray 可导入节点
   volwg manager rename ID 名称   修改线路名称和 SS 链接备注
   volwg manager register         登记旧版本或手工创建的 SS 线路
   volwg manager                  打开交互式管理菜单
@@ -37,6 +38,7 @@ usage() {
 说明：
   每条线路彼此独立，不会自动配置负载均衡。
   relay 显示公网 SS 链接；direct 显示仅 VPS 本机可达的隧道 SS 链接和 Xray outbound。
+  node 格式可选：ss、xray、routing、all（默认 all）。
 EOF
 }
 
@@ -186,6 +188,50 @@ show_node() {
   echo "$outbound"
 }
 
+export_node() {
+  local file="$1" format="${2:-all}" id name mode link outbound
+  id="$(field "$file" NODE_ID)"
+  name="$(decode "$(field "$file" DISPLAY_NAME_B64)")"
+  mode="$(field "$file" MODE)"
+  link="$(decode "$(field "$file" SS_LINK_B64)")"
+  outbound="$(decode "$(field "$file" XRAY_OUTBOUND_B64)")"
+  [[ "$format" == "ss" || "$format" == "xray" || "$format" == "routing" || "$format" == "all" ]] || die "导出格式必须是 ss、xray、routing 或 all"
+
+  echo "线路：$name ($id)"
+  echo "模式：$mode"
+  if [[ "$mode" == "direct" ]]; then
+    echo "注意：这是 WireGuard 私网节点，只能导入到已连接该隧道的优化 VPS/Xray。"
+  else
+    echo "说明：这是公网 relay 节点，可导入支持 ss:// 的图形化客户端或面板。"
+  fi
+  echo
+
+  if [[ "$format" == "ss" || "$format" == "all" ]]; then
+    echo "[SS 导入链接]"
+    echo "$link"
+    echo
+  fi
+  if [[ "$format" == "xray" || "$format" == "all" ]]; then
+    echo "[Xray outbound JSON]"
+    if [[ -n "$outbound" ]]; then
+      echo "$outbound"
+    else
+      echo "该旧版登记节点没有保存 outbound JSON，请使用上面的 SS 链接导入。"
+    fi
+    echo
+  fi
+  if [[ "$format" == "routing" || "$format" == "all" ]]; then
+    echo "[Xray routing 规则]"
+    cat <<EOF
+{
+  "type": "field",
+  "inboundTag": ["替换为你的入站tag"],
+  "outboundTag": "home-$id"
+}
+EOF
+  fi
+}
+
 show_status() {
   local file id name iface found=0
   shopt -s nullglob
@@ -266,7 +312,7 @@ EOF
 }
 
 menu() {
-  local choice node_id new_name
+  local choice node_id new_name export_choice export_format
   while true; do
     clear_screen
     echo "============================================================"
@@ -279,8 +325,9 @@ menu() {
     echo "  4) 查看握手状态"
     echo "  5) 修改线路/链接名称"
     echo "  6) 登记已有 SS 线路"
+    echo "  7) 生成/导出图形化 Xray 节点"
     echo "  0) 退出"
-    read -r -p "请选择 [0-6]：" choice
+    read -r -p "请选择 [0-7]：" choice
     echo
     case "$choice" in
       1) clear_screen; list_nodes; pause_screen ;;
@@ -300,6 +347,21 @@ menu() {
         pause_screen
         ;;
       6) clear_screen; register_node; pause_screen ;;
+      7)
+        clear_screen
+        read -r -p "输入节点 ID：" node_id
+        echo "格式：1) 全部  2) SS 链接  3) Xray outbound  4) routing"
+        read -r -p "请选择 [1-4]：" export_choice
+        case "$export_choice" in
+          1|"") export_format="all" ;;
+          2) export_format="ss" ;;
+          3) export_format="xray" ;;
+          4) export_format="routing" ;;
+          *) echo "格式选择无效。"; pause_screen; continue ;;
+        esac
+        export_node "$(node_file "$node_id")" "$export_format"
+        pause_screen
+        ;;
       0) return ;;
       *) echo "选择无效。" ;;
     esac
@@ -313,6 +375,7 @@ case "$command_name" in
   links) list_links ;;
   show) [[ -n "${2:-}" ]] || die "请提供节点 ID"; show_node "$(node_file "$2")" ;;
   status) show_status ;;
+  node|export) [[ -n "${2:-}" ]] || die "用法：volwg manager node ID [ss|xray|routing|all]"; export_node "$(node_file "$2")" "${3:-all}" ;;
   rename) [[ -n "${2:-}" && -n "${3:-}" ]] || die "用法：volwg manager rename ID 新名称"; rename_node "$(node_file "$2")" "$3" ;;
   register) register_node ;;
   menu) menu ;;

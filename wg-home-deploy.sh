@@ -733,6 +733,7 @@ echo "以后登录 VPS 可查看所有线路和链接："
 echo "  volwg manager list"
 echo "  volwg manager links"
 echo "  volwg manager show $NODE_ID"
+echo "  volwg manager node $NODE_ID"
 if [[ "$MODE" == "relay" ]]; then
   echo
   echo "注意：确认 VPS 防火墙允许 $WG_PORT/UDP 和 $SS_PORT/TCP+UDP。"
