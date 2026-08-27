@@ -69,7 +69,7 @@ print_header() {
 show_version() {
   local latest=""
   echo "当前版本：v$(current_version)"
-  if latest="$(fetch_text "$REPO_RAW_URL/VERSION" 2>/dev/null)"; then
+  if latest="$(fetch_text "$REPO_RAW_URL/VERSION?cache=$(date +%s)" 2>/dev/null)"; then
     latest="${latest//[[:space:]]/}"
     echo "在线版本：v$latest"
     if [[ "$latest" == "$(current_version)" ]]; then
@@ -86,7 +86,7 @@ online_update() {
   local current latest installer launcher_path launcher_dir
   current="$(current_version)"
   echo "正在检查 GitHub 更新..."
-  latest="$(fetch_text "$REPO_RAW_URL/VERSION")" || return 1
+  latest="$(fetch_text "$REPO_RAW_URL/VERSION?cache=$(date +%s)")" || return 1
   latest="${latest//[[:space:]]/}"
   [[ "$latest" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
     echo "错误：在线版本号无效：$latest" >&2
@@ -99,14 +99,14 @@ online_update() {
     return 0
   fi
 
-  installer="$(fetch_text "$REPO_RAW_URL/install.sh")" || return 1
+  installer="$(fetch_text "https://raw.githubusercontent.com/chnnic/volwg/v$latest/install.sh")" || return 1
   launcher_path="$(command -v volwg 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")"
   launcher_dir="$(dirname -- "$launcher_path")"
   echo "正在升级 VolWG..."
   if [[ -w "$LIB_DIR" && -w "$launcher_dir" ]]; then
-    VOLWG_NO_LAUNCH=1 bash -c "$installer"
+    VOLWG_REF="v$latest" VOLWG_NO_LAUNCH=1 bash -c "$installer"
   elif command -v sudo >/dev/null 2>&1; then
-    sudo env VOLWG_NO_LAUNCH=1 bash -c "$installer"
+    sudo env VOLWG_REF="v$latest" VOLWG_NO_LAUNCH=1 bash -c "$installer"
   else
     echo "错误：安装目录需要 root 权限，请使用 sudo volwg update。" >&2
     return 1
