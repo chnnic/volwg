@@ -63,6 +63,8 @@ root 用户安装到 `/usr/local/bin/volwg`；OpenWrt root 安装到 `/usr/bin/v
 
 Debian LXC 可以作为家宽端或中转端使用，但容器必须拥有 `NET_ADMIN`，并且宿主机内核必须启用 WireGuard。中转端还必须允许 nftables/NAT 和 IPv4 转发。部署前脚本会临时创建并立即删除一个测试接口；能力不足时会显示 LXC/内核相关的明确错误，不会继续写入线路配置。
 
+Debian 11 安装 ss-rust 时使用 musl 静态构建，不依赖较新的 glibc。脚本在替换程序和创建服务前会先运行 `ssserver --version` 自检；检测到旧二进制无法运行时会自动替换。
+
 ## 家宽服务端选择
 
 全自动向导会询问家宽机的 SS2022 服务端后端：
@@ -117,7 +119,7 @@ Debian LXC 可以作为家宽端或中转端使用，但容器必须拥有 `NET_
 
     git clone https://github.com/chnnic/volwg.git
     cd volwg
-    chmod 700 wg-home-deploy.sh wg-home-key-wizard.sh wg-home-manager.sh wg-home-remove.sh
+    chmod 700 wg-home-deploy.sh wg-home-key-wizard.sh wg-home-manager.sh wg-home-remove.sh wg-home-purge.sh
     chmod 755 volwg
 
 直接运行主脚本：
@@ -237,7 +239,7 @@ VPS 与家宽机可以使用不同 SSH 私钥。交互向导会分别询问两�
     1) 双 SSH 窗口完整部署
     1) 当前窗口是公网/优化 VPS
 
-VPS 窗口会显示其 WireGuard 公钥、endpoint、最终端口和一条 SS2022 AES-128 密钥，并等待家宽公钥。
+VPS 窗口会显示一条 `VOLWG1...` 开头的一行配对码，并等待家宽公钥。配对码包含本次线路的 WireGuard 公钥、endpoint、最终端口、网段、SS 后端和 SS2022 AES-128 密钥，只应在自己的两个 SSH 窗口间复制。
 
 再在家宽机窗口选择：
 
@@ -245,7 +247,7 @@ VPS 窗口会显示其 WireGuard 公钥、endpoint、最终端口和一条 SS202
     1) 双 SSH 窗口完整部署
     2) 当前窗口是家宽机
 
-按 VPS 窗口显示的最终参数填写，把两端 WireGuard 公钥互相复制，并把 VPS 生成的 SS2022 密钥粘贴到家宽窗口。家宽机会主动发起 WireGuard 连接；整个过程不会要求家宽公网 IP、家宽 SSH 地址或 SSH 私钥路径。
+把 VPS 的一行配对码完整粘贴到家宽窗口，家宽端会自动读取所有参数和 VPS 公钥，不再逐项手抄端口或密钥。家宽窗口只需要把自己的 WireGuard 公钥复制回 VPS。家宽机会主动发起 WireGuard 连接；整个过程不会要求家宽公网 IP、家宽 SSH 地址或 SSH 私钥路径。仍可留空配对码进入旧的逐项手动填写模式。
 
 两端都会自动避让本机已使用的端口。若家宽窗口调整了 SS2022 端口，VPS 窗口会在写入转发前再次询问家宽最终端口。部署完成后：
 
@@ -382,6 +384,7 @@ SSH 可能短暂断开，重新连接后使用以下命令检查：
 - WireGuard 私钥：每台机器本地生成，不会传给另一端。
 - WireGuard 公钥：可以在两个 SSH 窗口之间复制粘贴。
 - SS2022 密钥：写入家宽机所选的 ss-rust/Xray 服务端，并输出到 SS 链接或优化机 outbound。
+- 一行配对码：包含 VPS WireGuard 公钥和 SS2022 密钥，只能在自己的两个 SSH 窗口间传递。
 
 SS2022、SSH 私钥和 WireGuard 私钥均属于敏感信息，不要公开。
 
@@ -407,6 +410,21 @@ SS2022、SSH 私钥和 WireGuard 私钥均属于敏感信息，不要公开。
 
     ls -1t /etc/wireguard/wg-home.conf.before.*
 
+## 清空旧配置后重新测试
+
+先升级到最新版，然后在 VPS 和家宽机上分别执行：
+
+    volwg update
+    volwg purge
+
+`purge` 会先列出检测到的 VolWG 节点，输入大写 `PURGE` 后才开始。它会停止并清理 `wgh_*` 线路、VolWG SS/转发服务、`/etc/wg-home-exit` 记录和旧版 `wg-home`，但不会处理 `wg-id` 或其他非 VolWG WireGuard 接口。
+
+默认保留 VolWG 程序，清理后可以直接重新运行 `volwg`。所有文件会移动到 Linux 的 `/var/backups/volwg/时间/` 或 OpenWrt 的 `/root/volwg-backups/时间/`，不会直接永久擦除。
+
+如需连程序一起卸载：
+
+    volwg purge --uninstall
+
 ## 文件
 
 - VERSION：当前语义化版本号。
@@ -416,6 +434,7 @@ SS2022、SSH 私钥和 WireGuard 私钥均属于敏感信息，不要公开。
 - wg-home-key-wizard.sh：双 SSH 窗口完整部署及纯 WireGuard 公钥交换向导。
 - wg-home-manager.sh：安装到 VPS 的多线路查看和 SS 链接管理后台。
 - wg-home-remove.sh：按节点停止服务并归档删除 VPS/家宽端配置。
+- wg-home-purge.sh：清空本机全部 VolWG 线路、旧版配置和活动记录。
 
 ## 注意
 

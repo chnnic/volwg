@@ -37,12 +37,22 @@ grep -Fq -- '--node ID' < <(bash "$ROOT_DIR/wg-home-key-wizard.sh" --help)
 grep -Fq '自动向后寻找可用端口' < <(bash "$ROOT_DIR/wg-home-key-wizard.sh" --help)
 grep -Fq 'volwg remove --node' < <(bash "$ROOT_DIR/wg-home-remove.sh" --help)
 grep -Fq 'wg-home-remove.sh' "$ROOT_DIR/install.sh"
+grep -Fq 'wg-home-purge.sh' "$ROOT_DIR/install.sh"
+grep -Fq '不处理 wg-id' < <(bash "$ROOT_DIR/wg-home-purge.sh" --help)
+grep -Fq 'volwg purge' "$ROOT_DIR/volwg"
 grep -Fq '双 SSH 窗口完整部署（推荐）' "$ROOT_DIR/volwg"
 grep -Fq '控制端远程全自动部署' "$ROOT_DIR/volwg"
 grep -Fq 'volwg pair [参数]' "$ROOT_DIR/volwg"
 grep -Fq -- '--full' < <(bash "$ROOT_DIR/wg-home-key-wizard.sh" --help)
 grep -Fq '不需要两端互相 SSH' "$ROOT_DIR/wg-home-key-wizard.sh"
 grep -Fq 'SS2022 AES-128 密钥' "$ROOT_DIR/wg-home-key-wizard.sh"
+grep -Fq 'VPS 一行配对码' "$ROOT_DIR/wg-home-key-wizard.sh"
+grep -Fq 'VOLWG1.' "$ROOT_DIR/wg-home-key-wizard.sh"
+grep -Fq '/etc/wireguard/*.conf' "$ROOT_DIR/wg-home-key-wizard.sh"
+grep -Fq 'ssserver --version' "$ROOT_DIR/wg-home-key-wizard.sh"
+if grep -Fq 'unknown-linux-gnu' "$ROOT_DIR/wg-home-key-wizard.sh" "$ROOT_DIR/wg-home-deploy.sh"; then
+  exit 1
+fi
 grep -Fq '不安装 ss-rust' "$ROOT_DIR/volwg"
 grep -Fq '当前模式：仅 WireGuard 手动配对' "$ROOT_DIR/wg-home-key-wizard.sh"
 grep -Fq '组件安装位置' "$ROOT_DIR/wg-home-deploy.sh"
@@ -54,8 +64,8 @@ grep -Fq '家宽机 SSH 私钥路径' "$ROOT_DIR/wg-home-deploy.sh"
 grep -Fq '输入序号或节点 ID' "$ROOT_DIR/wg-home-manager.sh"
 grep -Fq 'delete-menu|remove-menu' "$ROOT_DIR/wg-home-manager.sh"
 grep -Fq '按序号删除本机线路' "$ROOT_DIR/volwg"
-grep -Fq 'BUILTIN_VERSION="1.4.8"' "$ROOT_DIR/volwg"
-grep -Fxq '1.4.8' "$ROOT_DIR/VERSION"
+grep -Fq 'BUILTIN_VERSION="1.4.9"' "$ROOT_DIR/volwg"
+grep -Fxq '1.4.9' "$ROOT_DIR/VERSION"
 
 menu_output="$(printf '2\n2\n0\n0\n0\n' | "$ROOT_DIR/volwg")"
 grep -Fq '此模式只会' <<<"$menu_output"
@@ -75,5 +85,37 @@ grep -Fq '主线路' <<<"$delete_menu_output"
 grep -Fq '[line1 / 完整线路]' <<<"$delete_menu_output"
 grep -Fq '备用家宽' <<<"$delete_menu_output"
 grep -Fq '[home2 / 仅 WireGuard/vps]' <<<"$delete_menu_output"
+
+pair_functions="$(awk '/^while \(\(\$#\)\); do/{exit} {print}' "$ROOT_DIR/wg-home-key-wizard.sh")"
+(
+  eval "$pair_functions"
+  NODE_ID="test1"
+  DISPLAY_NAME="测试线路"
+  WG_PREFIX="10.99.7"
+  VPS_ENDPOINT="example.com"
+  VPS_WG_PORT="52001"
+  HOME_WG_PORT="52002"
+  VPS_SS_PORT="32001"
+  HOME_SS_PORT="32002"
+  HOME_BACKEND="ss-rust"
+  MODE="relay"
+  PUBLIC_SS_ENABLED="1"
+  SS_PASSWORD="AAAAAAAAAAAAAAAAAAAAAA=="
+  local_public_key="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+  [[ -n "$local_public_key" ]]
+  pair_code="$(make_pair_code)"
+  NODE_ID="" DISPLAY_NAME="" WG_PREFIX="" VPS_ENDPOINT=""
+  VPS_WG_PORT="" HOME_WG_PORT="" VPS_SS_PORT="" HOME_SS_PORT=""
+  HOME_BACKEND="" MODE="" PUBLIC_SS_ENABLED="" SS_PASSWORD="" PAIR_PEER_PUBLIC_KEY=""
+  load_pair_code "$pair_code"
+  [[ "$PAIR_CODE_LOADED" == "1" ]]
+  [[ "$NODE_ID" == "test1" && "$DISPLAY_NAME" == "测试线路" ]]
+  [[ "$WG_PREFIX" == "10.99.7" && "$VPS_ENDPOINT" == "example.com" ]]
+  [[ "$VPS_WG_PORT" == "52001" && "$HOME_SS_PORT" == "32002" ]]
+  [[ "$HOME_WG_PORT" == "52002" && "$VPS_SS_PORT" == "32001" ]]
+  [[ "$HOME_BACKEND" == "ss-rust" && "$MODE" == "relay" && "$PUBLIC_SS_ENABLED" == "1" ]]
+  [[ "$SS_PASSWORD" == "AAAAAAAAAAAAAAAAAAAAAA==" ]]
+  [[ "$PAIR_PEER_PUBLIC_KEY" == "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" ]]
+)
 
 echo "VolWG tests: PASS"

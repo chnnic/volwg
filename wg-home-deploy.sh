@@ -340,6 +340,7 @@ fi
 [[ -f "$SCRIPT_DIR/wg-home-manager.sh" ]] || die "缺少 wg-home-manager.sh；请使用仓库完整版或一键安装命令"
 [[ -f "$SCRIPT_DIR/wg-home-key-wizard.sh" ]] || die "缺少 wg-home-key-wizard.sh；请使用仓库完整版或一键安装命令"
 [[ -f "$SCRIPT_DIR/wg-home-remove.sh" ]] || die "缺少 wg-home-remove.sh；请使用仓库完整版或一键安装命令"
+[[ -f "$SCRIPT_DIR/wg-home-purge.sh" ]] || die "缺少 wg-home-purge.sh；请使用仓库完整版或一键安装命令"
 [[ -f "$SCRIPT_DIR/volwg" ]] || die "缺少 volwg 快捷入口；请使用仓库完整版或一键安装命令"
 [[ -f "$SCRIPT_DIR/VERSION" ]] || die "缺少 VERSION；请使用仓库完整版或一键安装命令"
 
@@ -542,6 +543,16 @@ if [[ "$REPLACE_NODE" != "1" ]] && ssh_vps "test -e '/etc/wireguard/$WG_IFACE.co
   die "节点 $NODE_ID 已存在；换一个 --node，或确认覆盖后添加 --replace"
 fi
 
+# 同时检查 VolWG 新旧配置，避免相同隧道网段被两个 WireGuard 接口争用。
+vps_network_conflict="$(ssh_vps "set -eu; for f in /etc/wireguard/*.conf; do test -f \"\$f\" || continue; test \"\$f\" = '/etc/wireguard/$WG_IFACE.conf' && continue; address=\$(sed -n 's/^[[:space:]]*Address[[:space:]]*=[[:space:]]*//p' \"\$f\" | head -n 1); if test \"\$address\" = '$WG_PREFIX.1/24' || test \"\$address\" = '$WG_PREFIX.2/24'; then basename \"\$f\" .conf; fi; done" 2>/dev/null || true)"
+[[ -z "$vps_network_conflict" ]] || die "WireGuard 网段 $WG_PREFIX.0/24 已被 VPS 接口 $vps_network_conflict 使用，请更换 --wg-prefix 或先运行 volwg purge"
+if [[ "$home_kind" == "openwrt" ]]; then
+  home_network_conflict="$(ssh_openwrt "uci show network 2>/dev/null | grep -E \"\\.addresses='?$WG_PREFIX\\.[12]/24'?\" | grep -v '^network\\.$WG_IFACE\\.' | head -n 1" 2>/dev/null || true)"
+else
+  home_network_conflict="$(ssh_openwrt "set -eu; for f in /etc/wireguard/*.conf; do test -f \"\$f\" || continue; test \"\$f\" = '/etc/wireguard/$WG_IFACE.conf' && continue; address=\$(sed -n 's/^[[:space:]]*Address[[:space:]]*=[[:space:]]*//p' \"\$f\" | head -n 1); if test \"\$address\" = '$WG_PREFIX.1/24' || test \"\$address\" = '$WG_PREFIX.2/24'; then basename \"\$f\" .conf; fi; done" 2>/dev/null || true)"
+fi
+[[ -z "$home_network_conflict" ]] || die "WireGuard 网段 $WG_PREFIX.0/24 已被家宽机配置 $home_network_conflict 使用，请更换 --wg-prefix 或先运行 volwg purge"
+
 # 不同接口必须使用不同 VPS WG 监听端口和隧道网段；已开放的 VPS 公网 SS 端口也必须唯一。
 # 读取旧节点时回退到 WG_PORT/SS_PORT，保持向后兼容。
 collision="$(ssh_vps "set -eu; for f in /etc/wg-home-exit/nodes/*.conf; do test -f \"\$f\" || continue; test \"\$f\" = '/etc/wg-home-exit/nodes/$NODE_ID.conf' && continue; FILE_NODE=\$(sed -n 's/^NODE_ID=//p' \"\$f\" | head -n1); FILE_VPS_WG_PORT=\$(sed -n 's/^VPS_WG_PORT=//p' \"\$f\" | head -n1); test -n \"\$FILE_VPS_WG_PORT\" || FILE_VPS_WG_PORT=\$(sed -n 's/^WG_PORT=//p' \"\$f\" | head -n1); FILE_WG_PREFIX=\$(sed -n 's/^WG_PREFIX=//p' \"\$f\" | head -n1); FILE_MODE=\$(sed -n 's/^MODE=//p' \"\$f\" | head -n1); FILE_PUBLIC_SS=\$(sed -n 's/^PUBLIC_SS_ENABLED=//p' \"\$f\" | head -n1); test -n \"\$FILE_PUBLIC_SS\" || { test \"\$FILE_MODE\" = relay && FILE_PUBLIC_SS=1 || FILE_PUBLIC_SS=0; }; FILE_VPS_SS_PORT=\$(sed -n 's/^VPS_SS_PORT=//p' \"\$f\" | head -n1); test -n \"\$FILE_VPS_SS_PORT\" || FILE_VPS_SS_PORT=\$(sed -n 's/^SS_PORT=//p' \"\$f\" | head -n1); if test \"\$FILE_VPS_WG_PORT\" = '$VPS_WG_PORT'; then echo VPS_WG_PORT:\$FILE_NODE; fi; if test \"\$FILE_WG_PREFIX\" = '$WG_PREFIX'; then echo WG_PREFIX:\$FILE_NODE; fi; if test '$PUBLIC_SS_ENABLED' = 1 && test \"\$FILE_PUBLIC_SS\" = 1 && test \"\$FILE_VPS_SS_PORT\" = '$VPS_SS_PORT'; then echo VPS_SS_PORT:\$FILE_NODE; fi; done" 2>/dev/null || true)"
@@ -576,13 +587,20 @@ install_release() {
   download_file "$base_url/$archive.sha256" "$work_dir/$archive.sha256"
   (cd "$work_dir" && sha256sum -c "$archive.sha256")
   tar -xJf "$work_dir/$archive" -C "$work_dir" ssserver
+  "$work_dir/ssserver" --version >/dev/null 2>&1 || {
+    echo "下载的 ssserver 无法在当前系统运行" >&2
+    exit 1
+  }
   install -m 755 "$work_dir/ssserver" /usr/local/bin/ssserver
   rm -rf "$work_dir"
   trap - EXIT
 }
 
-if command -v ssserver >/dev/null 2>&1; then
+if command -v ssserver >/dev/null 2>&1 && ssserver --version >/dev/null 2>&1; then
   exit 0
+fi
+if command -v ssserver >/dev/null 2>&1; then
+  echo "检测到无法运行的旧 ssserver，正在替换为静态兼容版本。"
 fi
 
 machine="$(uname -m)"
@@ -610,20 +628,20 @@ else
   apt-get update >/dev/null
   apt-get install -y ca-certificates curl xz-utils >/dev/null
   case "$machine" in
-    x86_64) target="x86_64-unknown-linux-gnu" ;;
-    aarch64) target="aarch64-unknown-linux-gnu" ;;
-    armv7l) target="armv7-unknown-linux-gnueabihf" ;;
-    armv6l|armv5*) target="arm-unknown-linux-gnueabi" ;;
+    x86_64) target="x86_64-unknown-linux-musl" ;;
+    aarch64) target="aarch64-unknown-linux-musl" ;;
+    armv7l) target="armv7-unknown-linux-musleabihf" ;;
+    armv6l|armv5*) target="arm-unknown-linux-musleabi" ;;
     i386|i486|i586|i686) target="i686-unknown-linux-musl" ;;
-    riscv64) target="riscv64gc-unknown-linux-gnu" ;;
-    loongarch64) target="loongarch64-unknown-linux-gnu" ;;
+    riscv64) target="riscv64gc-unknown-linux-musl" ;;
+    loongarch64) target="loongarch64-unknown-linux-musl" ;;
     *) echo "不支持自动安装 ssserver 的架构：$machine" >&2; exit 1 ;;
   esac
   install_release "$target"
 fi
 
 command -v ssserver >/dev/null 2>&1
-ssserver --version
+ssserver --version >/dev/null 2>&1
 SSINSTALL
 sed -i "s/__SS_RUST_VERSION__/$SS_RUST_VERSION/" "$TMP_DIR/install-ssserver"
 chmod 700 "$TMP_DIR/install-ssserver"
@@ -1144,22 +1162,24 @@ scp_vps "$SCRIPT_DIR/wg-home-manager.sh" /tmp/wg-home-manager
 scp_vps "$SCRIPT_DIR/wg-home-deploy.sh" /tmp/volwg-deploy
 scp_vps "$SCRIPT_DIR/wg-home-key-wizard.sh" /tmp/volwg-key-wizard
 scp_vps "$SCRIPT_DIR/wg-home-remove.sh" /tmp/volwg-remove
+scp_vps "$SCRIPT_DIR/wg-home-purge.sh" /tmp/volwg-purge
 scp_vps "$SCRIPT_DIR/volwg" /tmp/volwg-launcher
 scp_vps "$SCRIPT_DIR/VERSION" /tmp/volwg-version
 scp_vps "$TMP_DIR/node.conf" "/tmp/$NODE_ID.conf"
-ssh_vps "set -eu; install -d -m 755 /usr/local/lib/volwg /usr/local/bin; install -m 700 /tmp/volwg-deploy /usr/local/lib/volwg/wg-home-deploy.sh; install -m 700 /tmp/volwg-key-wizard /usr/local/lib/volwg/wg-home-key-wizard.sh; install -m 700 /tmp/volwg-remove /usr/local/lib/volwg/wg-home-remove.sh; install -m 700 /tmp/wg-home-manager /usr/local/lib/volwg/wg-home-manager.sh; install -m 644 /tmp/volwg-version /usr/local/lib/volwg/VERSION; install -m 755 /tmp/volwg-launcher /usr/local/bin/volwg; install -m 755 /tmp/wg-home-manager /usr/local/sbin/wg-home-manager; install -d -m 700 /etc/wg-home-exit/nodes; install -m 600 '/tmp/$NODE_ID.conf' '/etc/wg-home-exit/nodes/$NODE_ID.conf'; rm -f /tmp/wg-home-manager /tmp/volwg-deploy /tmp/volwg-key-wizard /tmp/volwg-remove /tmp/volwg-launcher /tmp/volwg-version '/tmp/$NODE_ID.conf'"
+ssh_vps "set -eu; install -d -m 755 /usr/local/lib/volwg /usr/local/bin; install -m 700 /tmp/volwg-deploy /usr/local/lib/volwg/wg-home-deploy.sh; install -m 700 /tmp/volwg-key-wizard /usr/local/lib/volwg/wg-home-key-wizard.sh; install -m 700 /tmp/volwg-remove /usr/local/lib/volwg/wg-home-remove.sh; install -m 700 /tmp/volwg-purge /usr/local/lib/volwg/wg-home-purge.sh; install -m 700 /tmp/wg-home-manager /usr/local/lib/volwg/wg-home-manager.sh; install -m 644 /tmp/volwg-version /usr/local/lib/volwg/VERSION; install -m 755 /tmp/volwg-launcher /usr/local/bin/volwg; install -m 755 /tmp/wg-home-manager /usr/local/sbin/wg-home-manager; install -d -m 700 /etc/wg-home-exit/nodes; install -m 600 '/tmp/$NODE_ID.conf' '/etc/wg-home-exit/nodes/$NODE_ID.conf'; rm -f /tmp/wg-home-manager /tmp/volwg-deploy /tmp/volwg-key-wizard /tmp/volwg-remove /tmp/volwg-purge /tmp/volwg-launcher /tmp/volwg-version '/tmp/$NODE_ID.conf'"
 
 # 同步删除工具到家宽端，确保两端都能用同一个 volwg remove 命令清理本机线路。
 scp_openwrt "$SCRIPT_DIR/wg-home-manager.sh" /tmp/wg-home-manager
 scp_openwrt "$SCRIPT_DIR/wg-home-deploy.sh" /tmp/volwg-deploy
 scp_openwrt "$SCRIPT_DIR/wg-home-key-wizard.sh" /tmp/volwg-key-wizard
 scp_openwrt "$SCRIPT_DIR/wg-home-remove.sh" /tmp/volwg-remove
+scp_openwrt "$SCRIPT_DIR/wg-home-purge.sh" /tmp/volwg-purge
 scp_openwrt "$SCRIPT_DIR/volwg" /tmp/volwg-launcher
 scp_openwrt "$SCRIPT_DIR/VERSION" /tmp/volwg-version
 if [[ "$home_kind" == "openwrt" ]]; then
-  ssh_openwrt "set -eu; mkdir -p /usr/lib/volwg /usr/bin; cp /tmp/volwg-deploy /usr/lib/volwg/wg-home-deploy.sh; cp /tmp/volwg-key-wizard /usr/lib/volwg/wg-home-key-wizard.sh; cp /tmp/volwg-remove /usr/lib/volwg/wg-home-remove.sh; cp /tmp/wg-home-manager /usr/lib/volwg/wg-home-manager.sh; cp /tmp/volwg-version /usr/lib/volwg/VERSION; cp /tmp/volwg-launcher /usr/bin/volwg; chmod 700 /usr/lib/volwg/wg-home-deploy.sh /usr/lib/volwg/wg-home-key-wizard.sh /usr/lib/volwg/wg-home-remove.sh /usr/lib/volwg/wg-home-manager.sh; chmod 644 /usr/lib/volwg/VERSION; chmod 755 /usr/bin/volwg; rm -f /tmp/wg-home-manager /tmp/volwg-deploy /tmp/volwg-key-wizard /tmp/volwg-remove /tmp/volwg-launcher /tmp/volwg-version"
+  ssh_openwrt "set -eu; mkdir -p /usr/lib/volwg /usr/bin; cp /tmp/volwg-deploy /usr/lib/volwg/wg-home-deploy.sh; cp /tmp/volwg-key-wizard /usr/lib/volwg/wg-home-key-wizard.sh; cp /tmp/volwg-remove /usr/lib/volwg/wg-home-remove.sh; cp /tmp/volwg-purge /usr/lib/volwg/wg-home-purge.sh; cp /tmp/wg-home-manager /usr/lib/volwg/wg-home-manager.sh; cp /tmp/volwg-version /usr/lib/volwg/VERSION; cp /tmp/volwg-launcher /usr/bin/volwg; chmod 700 /usr/lib/volwg/wg-home-deploy.sh /usr/lib/volwg/wg-home-key-wizard.sh /usr/lib/volwg/wg-home-remove.sh /usr/lib/volwg/wg-home-purge.sh /usr/lib/volwg/wg-home-manager.sh; chmod 644 /usr/lib/volwg/VERSION; chmod 755 /usr/bin/volwg; rm -f /tmp/wg-home-manager /tmp/volwg-deploy /tmp/volwg-key-wizard /tmp/volwg-remove /tmp/volwg-purge /tmp/volwg-launcher /tmp/volwg-version"
 else
-  ssh_openwrt "set -eu; install -d -m 755 /usr/local/lib/volwg /usr/local/bin; install -m 700 /tmp/volwg-deploy /usr/local/lib/volwg/wg-home-deploy.sh; install -m 700 /tmp/volwg-key-wizard /usr/local/lib/volwg/wg-home-key-wizard.sh; install -m 700 /tmp/volwg-remove /usr/local/lib/volwg/wg-home-remove.sh; install -m 700 /tmp/wg-home-manager /usr/local/lib/volwg/wg-home-manager.sh; install -m 644 /tmp/volwg-version /usr/local/lib/volwg/VERSION; install -m 755 /tmp/volwg-launcher /usr/local/bin/volwg; rm -f /tmp/wg-home-manager /tmp/volwg-deploy /tmp/volwg-key-wizard /tmp/volwg-remove /tmp/volwg-launcher /tmp/volwg-version"
+  ssh_openwrt "set -eu; install -d -m 755 /usr/local/lib/volwg /usr/local/bin; install -m 700 /tmp/volwg-deploy /usr/local/lib/volwg/wg-home-deploy.sh; install -m 700 /tmp/volwg-key-wizard /usr/local/lib/volwg/wg-home-key-wizard.sh; install -m 700 /tmp/volwg-remove /usr/local/lib/volwg/wg-home-remove.sh; install -m 700 /tmp/volwg-purge /usr/local/lib/volwg/wg-home-purge.sh; install -m 700 /tmp/wg-home-manager /usr/local/lib/volwg/wg-home-manager.sh; install -m 644 /tmp/volwg-version /usr/local/lib/volwg/VERSION; install -m 755 /tmp/volwg-launcher /usr/local/bin/volwg; rm -f /tmp/wg-home-manager /tmp/volwg-deploy /tmp/volwg-key-wizard /tmp/volwg-remove /tmp/volwg-purge /tmp/volwg-launcher /tmp/volwg-version"
 fi
 
 echo

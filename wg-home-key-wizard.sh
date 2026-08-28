@@ -17,6 +17,8 @@ PUBLIC_SS_ENABLED="1"
 SS_PASSWORD=""
 SS_RUST_VERSION="v1.25.0"
 REPLACE_NODE="0"
+PAIR_CODE_LOADED="0"
+PAIR_PEER_PUBLIC_KEY=""
 
 usage() {
   cat <<'EOF'
@@ -25,6 +27,9 @@ usage() {
 完整部署（家宽机无需公网 IP，也无需允许 VPS SSH 登录）：
   sudo volwg pair --role vps
   sudo volwg pair --role home
+
+先运行 VPS 端并复制它显示的一行 VOLWG1 配对码；家宽端粘贴后会自动
+读取 VPS 公钥、endpoint、最终端口、网段、SS 后端和 AES-128 密钥。
 
 仅 WireGuard 窗口 A（公网/优化 VPS）：
   sudo volwg key --role vps
@@ -101,6 +106,19 @@ base64url_value() {
   printf '%s' "$1" | base64 | tr '+/' '-_' | tr -d '=\r\n'
 }
 
+base64url_decode() {
+  local input="${1//-/+}" remainder
+  input="${input//_/\/}"
+  remainder=$((${#input} % 4))
+  case "$remainder" in
+    0) ;;
+    2) input="${input}==" ;;
+    3) input="${input}=" ;;
+    *) return 1 ;;
+  esac
+  printf '%s' "$input" | base64 -d 2>/dev/null
+}
+
 urlencode() {
   local LC_ALL=C input="$1" output="" char hex index
   for ((index=0; index<${#input}; index++)); do
@@ -120,6 +138,69 @@ valid_ss_password() {
   local decoded_size
   decoded_size="$(printf '%s' "$1" | base64 -d 2>/dev/null | wc -c | tr -d '[:space:]')"
   [[ "$decoded_size" == "16" ]]
+}
+
+pair_field() {
+  local payload="$1" key="$2"
+  printf '%s\n' "$payload" | sed -n "s/^${key}=//p" | head -n 1
+}
+
+load_pair_code() {
+  local code="$1" payload encoded_name
+  [[ "$code" == VOLWG1.* ]] || die "配对码格式无效，必须以 VOLWG1. 开头"
+  payload="$(base64url_decode "${code#VOLWG1.}")" || die "配对码无法解码"
+  [[ "$(pair_field "$payload" FORMAT)" == "VOLWG1" ]] || die "配对码版本无效"
+  NODE_ID="$(pair_field "$payload" NODE_ID)"
+  encoded_name="$(pair_field "$payload" DISPLAY_NAME_B64)"
+  DISPLAY_NAME="$(printf '%s' "$encoded_name" | base64 -d 2>/dev/null)" || die "配对码线路名称无效"
+  WG_PREFIX="$(pair_field "$payload" WG_PREFIX)"
+  VPS_ENDPOINT="$(pair_field "$payload" VPS_ENDPOINT)"
+  VPS_WG_PORT="$(pair_field "$payload" VPS_WG_PORT)"
+  HOME_WG_PORT="$(pair_field "$payload" HOME_WG_PORT)"
+  VPS_SS_PORT="$(pair_field "$payload" VPS_SS_PORT)"
+  HOME_SS_PORT="$(pair_field "$payload" HOME_SS_PORT)"
+  HOME_BACKEND="$(pair_field "$payload" HOME_BACKEND)"
+  MODE="$(pair_field "$payload" MODE)"
+  PUBLIC_SS_ENABLED="$(pair_field "$payload" PUBLIC_SS_ENABLED)"
+  SS_PASSWORD="$(pair_field "$payload" SS_PASSWORD)"
+  PAIR_PEER_PUBLIC_KEY="$(pair_field "$payload" VPS_PUBLIC_KEY)"
+
+  [[ "$NODE_ID" =~ ^[a-z0-9][a-z0-9_]{0,7}$ ]] || die "配对码节点 ID 无效"
+  [[ -n "$DISPLAY_NAME" ]] || die "配对码线路名称为空"
+  [[ "$WG_PREFIX" =~ ^([0-9]{1,3}\.){2}[0-9]{1,3}$ ]] || die "配对码网段无效"
+  [[ "$VPS_ENDPOINT" =~ ^[A-Za-z0-9._-]+$ ]] || die "配对码 VPS 地址无效"
+  valid_port "$VPS_WG_PORT" || die "配对码 VPS WireGuard 端口无效"
+  valid_port "$HOME_WG_PORT" || die "配对码家宽 WireGuard 端口无效"
+  valid_port "$VPS_SS_PORT" || die "配对码 VPS SS 端口无效"
+  valid_port "$HOME_SS_PORT" || die "配对码家宽 SS 端口无效"
+  [[ "$HOME_BACKEND" == "ss-rust" || "$HOME_BACKEND" == "xray" ]] || die "配对码 SS 服务端无效"
+  [[ "$MODE" == "relay" || "$MODE" == "direct" ]] || die "配对码模式无效"
+  [[ "$PUBLIC_SS_ENABLED" == "0" || "$PUBLIC_SS_ENABLED" == "1" ]] || die "配对码公网 SS 开关无效"
+  valid_ss_password "$SS_PASSWORD" || die "配对码 SS2022 密钥无效"
+  valid_wg_key "$PAIR_PEER_PUBLIC_KEY" || die "配对码 VPS WireGuard 公钥无效"
+  PAIR_CODE_LOADED="1"
+}
+
+make_pair_code() {
+  local payload
+  payload="$(cat <<EOF
+FORMAT=VOLWG1
+NODE_ID=$NODE_ID
+DISPLAY_NAME_B64=$(encode "$DISPLAY_NAME")
+WG_PREFIX=$WG_PREFIX
+VPS_ENDPOINT=$VPS_ENDPOINT
+VPS_WG_PORT=$VPS_WG_PORT
+HOME_WG_PORT=$HOME_WG_PORT
+VPS_SS_PORT=$VPS_SS_PORT
+HOME_SS_PORT=$HOME_SS_PORT
+HOME_BACKEND=$HOME_BACKEND
+MODE=$MODE
+PUBLIC_SS_ENABLED=$PUBLIC_SS_ENABLED
+SS_PASSWORD=$SS_PASSWORD
+VPS_PUBLIC_KEY=$local_public_key
+EOF
+)"
+  printf 'VOLWG1.%s' "$(base64url_value "$payload")"
 }
 
 next_node_id() {
@@ -206,16 +287,34 @@ line_exists() {
   fi
 }
 
-check_linux_network_collision() {
-  local file existing_address
+check_network_collision() {
+  local file existing_address iface line
   shopt -s nullglob
-  for file in /etc/wireguard/wgh_*.conf; do
-    [[ "$file" == "$WG_CONFIG" ]] && continue
-    existing_address="$(sed -n 's/^[[:space:]]*Address[[:space:]]*=[[:space:]]*//p' "$file" | head -n 1)"
-    if [[ "$existing_address" == "$WG_PREFIX.1/24" || "$existing_address" == "$WG_PREFIX.2/24" ]]; then
-      die "WireGuard 网段 $WG_PREFIX.0/24 已被 $(basename "$file" .conf) 使用，请更换网段"
+  if [[ "$SYSTEM_KIND" == "linux" ]]; then
+    for file in /etc/wireguard/*.conf; do
+      [[ "$file" == "$WG_CONFIG" ]] && continue
+      existing_address="$(sed -n 's/^[[:space:]]*Address[[:space:]]*=[[:space:]]*//p' "$file" | head -n 1)"
+      if [[ "$existing_address" == "$WG_PREFIX.1/24" || "$existing_address" == "$WG_PREFIX.2/24" ]]; then
+        die "WireGuard 网段 $WG_PREFIX.0/24 已被 $(basename "$file" .conf) 使用，请更换网段或先运行 volwg purge"
+      fi
+    done
+  else
+    while IFS= read -r line; do
+      [[ "$line" == *"='$WG_PREFIX.1/24'" || "$line" == *"='$WG_PREFIX.2/24'" ]] || continue
+      iface="${line#network.}"
+      iface="${iface%%.*}"
+      [[ "$iface" == "$WG_IFACE" ]] || die "WireGuard 网段 $WG_PREFIX.0/24 已被 $iface 使用，请更换网段或先运行 volwg purge"
+    done < <(uci show network 2>/dev/null | grep '\.addresses=' || true)
+  fi
+
+  while IFS= read -r line; do
+    iface="$(awk '{print $2}' <<<"$line")"
+    iface="${iface%:}"
+    [[ "$iface" == "$WG_IFACE" ]] && continue
+    if [[ "$line" == *" $WG_PREFIX.1/24 "* || "$line" == *" $WG_PREFIX.2/24 "* ]]; then
+      die "WireGuard 网段 $WG_PREFIX.0/24 已被活动接口 $iface 使用，请更换网段或先运行 volwg purge"
     fi
-  done
+  done < <(ip -4 -o addr show 2>/dev/null || true)
 }
 
 save_metadata() {
@@ -247,8 +346,11 @@ EOF
 
 install_ssrust() {
   local machine target archive base_url work_dir
-  if command -v ssserver >/dev/null 2>&1; then
+  if command -v ssserver >/dev/null 2>&1 && ssserver --version >/dev/null 2>&1; then
     return
+  fi
+  if command -v ssserver >/dev/null 2>&1; then
+    echo "检测到无法运行的旧 ssserver，正在替换为静态兼容版本。"
   fi
   machine="$(uname -m)"
   if [[ "$SYSTEM_KIND" == "openwrt" ]]; then
@@ -271,13 +373,13 @@ install_ssrust() {
     apt-get update >/dev/null
     apt-get install -y ca-certificates curl xz-utils >/dev/null
     case "$machine" in
-      x86_64) target="x86_64-unknown-linux-gnu" ;;
-      aarch64) target="aarch64-unknown-linux-gnu" ;;
-      armv7l) target="armv7-unknown-linux-gnueabihf" ;;
-      armv6l|armv5*) target="arm-unknown-linux-gnueabi" ;;
+      x86_64) target="x86_64-unknown-linux-musl" ;;
+      aarch64) target="aarch64-unknown-linux-musl" ;;
+      armv7l) target="armv7-unknown-linux-musleabihf" ;;
+      armv6l|armv5*) target="arm-unknown-linux-musleabi" ;;
       i386|i486|i586|i686) target="i686-unknown-linux-musl" ;;
-      riscv64) target="riscv64gc-unknown-linux-gnu" ;;
-      loongarch64) target="loongarch64-unknown-linux-gnu" ;;
+      riscv64) target="riscv64gc-unknown-linux-musl" ;;
+      loongarch64) target="loongarch64-unknown-linux-musl" ;;
       *) die "当前架构 $machine 不支持自动安装 ss-rust" ;;
     esac
   fi
@@ -296,11 +398,16 @@ install_ssrust() {
   fi
   (cd "$work_dir" && sha256sum -c "$archive.sha256")
   tar -xJf "$work_dir/$archive" -C "$work_dir" ssserver
+  "$work_dir/ssserver" --version >/dev/null 2>&1 || {
+    rm -rf -- "$work_dir"
+    die "下载的 ssserver 无法在当前系统运行，未替换现有程序"
+  }
   mkdir -p /usr/local/bin
   cp "$work_dir/ssserver" /usr/local/bin/ssserver
   chmod 755 /usr/local/bin/ssserver
   rm -rf -- "$work_dir"
   command -v ssserver >/dev/null 2>&1 || die "ss-rust ssserver 安装失败"
+  ssserver --version >/dev/null 2>&1 || die "ss-rust 安装后运行自检失败"
 }
 
 install_xray() {
@@ -679,6 +786,15 @@ else
 fi
 [[ "$ROLE" != "vps" || "$SYSTEM_KIND" == "linux" ]] || die "VPS 角色仅支持 Debian/Ubuntu"
 
+if [[ "$FULL_STACK" == "1" && "$ROLE" == "home" ]]; then
+  echo "请先在 VPS 窗口运行到显示配对码。"
+  read -r -p "粘贴 VPS 一行配对码（留空改为逐项手动填写）：" pair_code_answer
+  if [[ -n "$pair_code_answer" ]]; then
+    load_pair_code "$pair_code_answer"
+    echo "配对码读取成功：$DISPLAY_NAME ($NODE_ID)"
+  fi
+fi
+
 default_node="$(next_node_id)"
 [[ -n "$NODE_ID" ]] || NODE_ID="$(prompt_default "节点 ID（两个窗口填写相同 ID）" "$default_node")"
 [[ "$NODE_ID" =~ ^[a-z0-9][a-z0-9_]{0,7}$ ]] || die "节点 ID 必须是 1-8 位小写字母、数字或下划线"
@@ -779,25 +895,29 @@ fi
 if [[ "$FULL_STACK" == "1" ]]; then
   echo
   echo "[3/7] 双窗口共享参数"
-  echo "以下参数请以 VPS 窗口最终显示的值为准，在家宽窗口填写相同内容。"
-  if [[ "$ROLE" == "home" && -z "$VPS_ENDPOINT" ]]; then
-    VPS_ENDPOINT="$(prompt_required "输入 VPS 窗口显示的公网 IP 或域名")"
+  if [[ "$PAIR_CODE_LOADED" == "1" ]]; then
+    echo "已从 VPS 配对码自动读取网段、endpoint、端口、服务端、公钥和 AES-128 密钥。"
+  else
+    echo "以下参数请以 VPS 窗口最终显示的值为准，在家宽窗口填写相同内容。"
+    if [[ "$ROLE" == "home" && -z "$VPS_ENDPOINT" ]]; then
+      VPS_ENDPOINT="$(prompt_required "输入 VPS 窗口显示的公网 IP 或域名")"
+    fi
+    WG_PREFIX="$(prompt_default "WireGuard 网段前缀" "$WG_PREFIX")"
+    VPS_WG_PORT="$(prompt_default "VPS WireGuard 公网 UDP 起始端口" "$VPS_WG_PORT")"
+    HOME_WG_PORT="$(prompt_default "家宽机 WireGuard 本地 UDP 起始端口" "$HOME_WG_PORT")"
+    VPS_SS_PORT="$(prompt_default "VPS 公网 SS TCP/UDP 起始端口" "$VPS_SS_PORT")"
+    HOME_SS_PORT="$(prompt_default "家宽机 SS2022 TCP/UDP 起始端口" "$HOME_SS_PORT")"
+    echo "家宽 SS2022 服务端（两个窗口选择相同项）："
+    echo "  1) ss-rust ssserver（推荐）"
+    echo "  2) Xray Core"
+    read -r -p "请选择 [1-2，默认 1]：" backend_choice
+    case "${backend_choice:-1}" in
+      1) HOME_BACKEND="ss-rust" ;;
+      2) HOME_BACKEND="xray" ;;
+      *) die "家宽服务端选择无效" ;;
+    esac
   fi
-  WG_PREFIX="$(prompt_default "WireGuard 网段前缀" "$WG_PREFIX")"
-  VPS_WG_PORT="$(prompt_default "VPS WireGuard 公网 UDP 起始端口" "$VPS_WG_PORT")"
-  HOME_WG_PORT="$(prompt_default "家宽机 WireGuard 本地 UDP 起始端口" "$HOME_WG_PORT")"
-  VPS_SS_PORT="$(prompt_default "VPS 公网 SS TCP/UDP 起始端口" "$VPS_SS_PORT")"
-  HOME_SS_PORT="$(prompt_default "家宽机 SS2022 TCP/UDP 起始端口" "$HOME_SS_PORT")"
-  echo "家宽 SS2022 服务端（两个窗口选择相同项）："
-  echo "  1) ss-rust ssserver（推荐）"
-  echo "  2) Xray Core"
-  read -r -p "请选择 [1-2，默认 1]：" backend_choice
-  case "${backend_choice:-1}" in
-    1) HOME_BACKEND="ss-rust" ;;
-    2) HOME_BACKEND="xray" ;;
-    *) die "家宽服务端选择无效" ;;
-  esac
-  if [[ "$ROLE" == "vps" ]]; then
+  if [[ "$ROLE" == "vps" && "$PAIR_CODE_LOADED" != "1" ]]; then
     echo "推荐入口："
     echo "  1) relay：默认推荐公网 SS"
     echo "  2) direct：默认推荐 WireGuard 私网 SS"
@@ -871,6 +991,8 @@ if [[ "$FULL_STACK" == "1" && "$ROLE" == "vps" && -z "$SS_PASSWORD" ]]; then
   SS_PASSWORD="$(dd if=/dev/urandom bs=16 count=1 2>/dev/null | base64 | tr -d '\r\n')"
 fi
 
+check_network_collision
+
 echo
 echo "============================================================"
 echo "线路：$DISPLAY_NAME ($NODE_ID)"
@@ -892,11 +1014,18 @@ if [[ "$FULL_STACK" == "1" && "$ROLE" == "vps" ]]; then
   echo "  家宽 SS 端口：$HOME_SS_PORT"
   echo "  SS2022 AES-128 密钥：$SS_PASSWORD"
   echo "密钥只在自己的两个 SSH 窗口间复制，不要公开。"
+  echo
+  echo "VPS 一行配对码（推荐整行复制到家宽窗口）："
+  make_pair_code
+  echo
 fi
 echo "============================================================"
 echo
 
-if [[ "$ROLE" == "vps" ]]; then
+if [[ -n "$PAIR_PEER_PUBLIC_KEY" ]]; then
+  peer_public_key="$PAIR_PEER_PUBLIC_KEY"
+  echo "已从配对码读取 VPS 公钥。"
+elif [[ "$ROLE" == "vps" ]]; then
   read -r -p "粘贴家宽机公钥：" peer_public_key
 else
   read -r -p "粘贴 VPS 公钥：" peer_public_key
@@ -914,10 +1043,6 @@ if [[ "$FULL_STACK" == "1" && "$ROLE" == "home" ]]; then
   valid_ss_password "$SS_PASSWORD" || die "SS2022 AES-128 密钥无效，必须是 16 字节 Base64 密钥"
 elif [[ "$FULL_STACK" == "1" ]]; then
   valid_ss_password "$SS_PASSWORD" || die "生成 SS2022 密钥失败"
-fi
-
-if [[ "$SYSTEM_KIND" == "linux" ]]; then
-  check_linux_network_collision
 fi
 
 echo
