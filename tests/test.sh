@@ -57,6 +57,10 @@ grep -Fq '请重新输入；线路显示名称稍后仍可使用大写字母和�
 grep -Fq '/etc/wg-home-exit/nodes/$candidate.conf' "$ROOT_DIR/wg-home-key-wizard.sh"
 grep -Fq '在显示网段和端口输入框之前先扫描一次' "$ROOT_DIR/wg-home-key-wizard.sh"
 grep -Fq 'WireGuard 网段 ${WG_PREFIX}.0/24 已占用' "$ROOT_DIR/wg-home-key-wizard.sh"
+grep -Fq '当前系统需要 base64 或 openssl' "$ROOT_DIR/wg-home-key-wizard.sh"
+grep -Fq '请重新粘贴完整配对码' "$ROOT_DIR/wg-home-key-wizard.sh"
+grep -Fq 'openssl base64 -d -A' "$ROOT_DIR/wg-home-key-wizard.sh"
+grep -Fq 'openssl base64 -d -A' "$ROOT_DIR/wg-home-manager.sh"
 grep -Fq 'VOLWG1.' "$ROOT_DIR/wg-home-key-wizard.sh"
 grep -Fq '/etc/wireguard/*.conf' "$ROOT_DIR/wg-home-key-wizard.sh"
 grep -Fq 'ssserver --version' "$ROOT_DIR/wg-home-key-wizard.sh"
@@ -74,8 +78,8 @@ grep -Fq '家宽机 SSH 私钥路径' "$ROOT_DIR/wg-home-deploy.sh"
 grep -Fq '输入序号或节点 ID' "$ROOT_DIR/wg-home-manager.sh"
 grep -Fq 'delete-menu|remove-menu' "$ROOT_DIR/wg-home-manager.sh"
 grep -Fq '按序号删除本机线路' "$ROOT_DIR/volwg"
-grep -Fq 'BUILTIN_VERSION="1.4.13"' "$ROOT_DIR/volwg"
-grep -Fxq '1.4.13' "$ROOT_DIR/VERSION"
+grep -Fq 'BUILTIN_VERSION="1.4.14"' "$ROOT_DIR/volwg"
+grep -Fxq '1.4.14' "$ROOT_DIR/VERSION"
 
 menu_output="$(printf '2\n2\n0\n0\n0\n' | "$ROOT_DIR/volwg")"
 grep -Fq '此模式只会' <<<"$menu_output"
@@ -99,6 +103,10 @@ grep -Fq '[home2 / 仅 WireGuard/vps]' <<<"$delete_menu_output"
 pair_functions="$(awk '/^while \(\(\$#\)\); do/{exit} {print}' "$ROOT_DIR/wg-home-key-wizard.sh")"
 (
   eval "$pair_functions"
+  VOLWG_FORCE_OPENSSL_BASE64="1"
+  [[ "$(printf SGVsbG8= | base64_decode_stream)" == "Hello" ]]
+  [[ "$(printf Hello | base64_encode_stream)" == "SGVsbG8=" ]]
+  VOLWG_FORCE_OPENSSL_BASE64="0"
   NODE_ID=""
   prompt_node_id "home1" <<< $'IDN-E87N\n\n' 2>/dev/null
   [[ "$NODE_ID" == "idn_e87n" ]]

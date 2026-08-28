@@ -81,14 +81,40 @@ field_fallback() {
   printf '%s' "$value"
 }
 
+base64_encode_stream() {
+  if command -v base64 >/dev/null 2>&1; then
+    base64
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl base64 -A
+  else
+    return 127
+  fi
+}
+
+base64_decode_stream() {
+  if command -v base64 >/dev/null 2>&1; then
+    if printf '' | base64 -d >/dev/null 2>&1; then
+      base64 -d
+    elif printf '' | base64 --decode >/dev/null 2>&1; then
+      base64 --decode
+    else
+      base64 -D
+    fi
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl base64 -d -A
+  else
+    return 127
+  fi
+}
+
 decode() {
   local value="$1"
   [[ -n "$value" ]] || return 0
-  printf '%s' "$value" | base64 -d 2>/dev/null || true
+  printf '%s' "$value" | base64_decode_stream 2>/dev/null || true
 }
 
 encode() {
-  printf '%s' "$1" | base64 | tr -d '\r\n'
+  printf '%s' "$1" | base64_encode_stream | tr -d '\r\n'
 }
 
 set_field_value() {

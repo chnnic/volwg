@@ -136,12 +136,38 @@ valid_wg_prefix() {
   ((10#$first <= 255 && 10#$second <= 255 && 10#$third <= 255))
 }
 
+base64_encode_stream() {
+  if [[ "${VOLWG_FORCE_OPENSSL_BASE64:-0}" != "1" ]] && command -v base64 >/dev/null 2>&1; then
+    base64
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl base64 -A
+  else
+    return 127
+  fi
+}
+
+base64_decode_stream() {
+  if [[ "${VOLWG_FORCE_OPENSSL_BASE64:-0}" != "1" ]] && command -v base64 >/dev/null 2>&1; then
+    if printf '' | base64 -d >/dev/null 2>&1; then
+      base64 -d
+    elif printf '' | base64 --decode >/dev/null 2>&1; then
+      base64 --decode
+    else
+      base64 -D
+    fi
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl base64 -d -A
+  else
+    return 127
+  fi
+}
+
 encode() {
-  printf '%s' "$1" | base64 | tr -d '\r\n'
+  printf '%s' "$1" | base64_encode_stream | tr -d '\r\n'
 }
 
 base64url_value() {
-  printf '%s' "$1" | base64 | tr '+/' '-_' | tr -d '=\r\n'
+  printf '%s' "$1" | base64_encode_stream | tr '+/' '-_' | tr -d '=\r\n'
 }
 
 base64url_decode() {
@@ -154,7 +180,7 @@ base64url_decode() {
     3) input="${input}=" ;;
     *) return 1 ;;
   esac
-  printf '%s' "$input" | base64 -d 2>/dev/null
+  printf '%s' "$input" | base64_decode_stream 2>/dev/null
 }
 
 urlencode() {
@@ -174,7 +200,7 @@ urlencode() {
 
 valid_ss_password() {
   local decoded_size
-  decoded_size="$(printf '%s' "$1" | base64 -d 2>/dev/null | wc -c | tr -d '[:space:]')"
+  decoded_size="$(printf '%s' "$1" | base64_decode_stream 2>/dev/null | wc -c | tr -d '[:space:]')" || return 1
   [[ "$decoded_size" == "16" ]]
 }
 
@@ -184,38 +210,54 @@ pair_field() {
 }
 
 load_pair_code() {
-  local code="$1" payload encoded_name
-  [[ "$code" == VOLWG1.* ]] || die "配对码格式无效，必须以 VOLWG1. 开头"
-  payload="$(base64url_decode "${code#VOLWG1.}")" || die "配对码无法解码"
-  [[ "$(pair_field "$payload" FORMAT)" == "VOLWG1" ]] || die "配对码版本无效"
-  NODE_ID="$(pair_field "$payload" NODE_ID)"
+  local code="$1" payload encoded_name decoded_node decoded_name decoded_prefix decoded_endpoint
+  local decoded_vps_wg_port decoded_home_wg_port decoded_vps_ss_port decoded_home_ss_port
+  local decoded_backend decoded_mode decoded_public_ss decoded_password decoded_public_key
+  [[ "$code" == VOLWG1.* ]] || { echo "错误：配对码格式无效，必须以 VOLWG1. 开头" >&2; return 1; }
+  payload="$(base64url_decode "${code#VOLWG1.}")" || { echo "错误：配对码无法解码；当前系统需要 base64 或 openssl" >&2; return 1; }
+  [[ "$(pair_field "$payload" FORMAT)" == "VOLWG1" ]] || { echo "错误：配对码版本无效" >&2; return 1; }
+  decoded_node="$(pair_field "$payload" NODE_ID)"
   encoded_name="$(pair_field "$payload" DISPLAY_NAME_B64)"
-  DISPLAY_NAME="$(printf '%s' "$encoded_name" | base64 -d 2>/dev/null)" || die "配对码线路名称无效"
-  WG_PREFIX="$(pair_field "$payload" WG_PREFIX)"
-  VPS_ENDPOINT="$(pair_field "$payload" VPS_ENDPOINT)"
-  VPS_WG_PORT="$(pair_field "$payload" VPS_WG_PORT)"
-  HOME_WG_PORT="$(pair_field "$payload" HOME_WG_PORT)"
-  VPS_SS_PORT="$(pair_field "$payload" VPS_SS_PORT)"
-  HOME_SS_PORT="$(pair_field "$payload" HOME_SS_PORT)"
-  HOME_BACKEND="$(pair_field "$payload" HOME_BACKEND)"
-  MODE="$(pair_field "$payload" MODE)"
-  PUBLIC_SS_ENABLED="$(pair_field "$payload" PUBLIC_SS_ENABLED)"
-  SS_PASSWORD="$(pair_field "$payload" SS_PASSWORD)"
-  PAIR_PEER_PUBLIC_KEY="$(pair_field "$payload" VPS_PUBLIC_KEY)"
+  decoded_name="$(printf '%s' "$encoded_name" | base64_decode_stream 2>/dev/null)" || { echo "错误：配对码线路名称无效" >&2; return 1; }
+  decoded_prefix="$(pair_field "$payload" WG_PREFIX)"
+  decoded_endpoint="$(pair_field "$payload" VPS_ENDPOINT)"
+  decoded_vps_wg_port="$(pair_field "$payload" VPS_WG_PORT)"
+  decoded_home_wg_port="$(pair_field "$payload" HOME_WG_PORT)"
+  decoded_vps_ss_port="$(pair_field "$payload" VPS_SS_PORT)"
+  decoded_home_ss_port="$(pair_field "$payload" HOME_SS_PORT)"
+  decoded_backend="$(pair_field "$payload" HOME_BACKEND)"
+  decoded_mode="$(pair_field "$payload" MODE)"
+  decoded_public_ss="$(pair_field "$payload" PUBLIC_SS_ENABLED)"
+  decoded_password="$(pair_field "$payload" SS_PASSWORD)"
+  decoded_public_key="$(pair_field "$payload" VPS_PUBLIC_KEY)"
 
-  [[ "$NODE_ID" =~ ^[a-z0-9][a-z0-9_]{0,7}$ ]] || die "配对码节点 ID 无效"
-  [[ -n "$DISPLAY_NAME" ]] || die "配对码线路名称为空"
-  [[ "$WG_PREFIX" =~ ^([0-9]{1,3}\.){2}[0-9]{1,3}$ ]] || die "配对码网段无效"
-  [[ "$VPS_ENDPOINT" =~ ^[A-Za-z0-9._-]+$ ]] || die "配对码 VPS 地址无效"
-  valid_port "$VPS_WG_PORT" || die "配对码 VPS WireGuard 端口无效"
-  valid_port "$HOME_WG_PORT" || die "配对码家宽 WireGuard 端口无效"
-  valid_port "$VPS_SS_PORT" || die "配对码 VPS SS 端口无效"
-  valid_port "$HOME_SS_PORT" || die "配对码家宽 SS 端口无效"
-  [[ "$HOME_BACKEND" == "ss-rust" || "$HOME_BACKEND" == "xray" ]] || die "配对码 SS 服务端无效"
-  [[ "$MODE" == "relay" || "$MODE" == "direct" ]] || die "配对码模式无效"
-  [[ "$PUBLIC_SS_ENABLED" == "0" || "$PUBLIC_SS_ENABLED" == "1" ]] || die "配对码公网 SS 开关无效"
-  valid_ss_password "$SS_PASSWORD" || die "配对码 SS2022 密钥无效"
-  valid_wg_key "$PAIR_PEER_PUBLIC_KEY" || die "配对码 VPS WireGuard 公钥无效"
+  valid_node_id "$decoded_node" || { echo "错误：配对码节点 ID 无效" >&2; return 1; }
+  [[ -n "$decoded_name" ]] || { echo "错误：配对码线路名称为空" >&2; return 1; }
+  valid_wg_prefix "$decoded_prefix" || { echo "错误：配对码网段无效" >&2; return 1; }
+  [[ "$decoded_endpoint" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "错误：配对码 VPS 地址无效" >&2; return 1; }
+  valid_port "$decoded_vps_wg_port" || { echo "错误：配对码 VPS WireGuard 端口无效" >&2; return 1; }
+  valid_port "$decoded_home_wg_port" || { echo "错误：配对码家宽 WireGuard 端口无效" >&2; return 1; }
+  valid_port "$decoded_vps_ss_port" || { echo "错误：配对码 VPS SS 端口无效" >&2; return 1; }
+  valid_port "$decoded_home_ss_port" || { echo "错误：配对码家宽 SS 端口无效" >&2; return 1; }
+  [[ "$decoded_backend" == "ss-rust" || "$decoded_backend" == "xray" ]] || { echo "错误：配对码 SS 服务端无效" >&2; return 1; }
+  [[ "$decoded_mode" == "relay" || "$decoded_mode" == "direct" ]] || { echo "错误：配对码模式无效" >&2; return 1; }
+  [[ "$decoded_public_ss" == "0" || "$decoded_public_ss" == "1" ]] || { echo "错误：配对码公网 SS 开关无效" >&2; return 1; }
+  valid_ss_password "$decoded_password" || { echo "错误：配对码 SS2022 密钥无效" >&2; return 1; }
+  valid_wg_key "$decoded_public_key" || { echo "错误：配对码 VPS WireGuard 公钥无效" >&2; return 1; }
+
+  NODE_ID="$decoded_node"
+  DISPLAY_NAME="$decoded_name"
+  WG_PREFIX="$decoded_prefix"
+  VPS_ENDPOINT="$decoded_endpoint"
+  VPS_WG_PORT="$decoded_vps_wg_port"
+  HOME_WG_PORT="$decoded_home_wg_port"
+  VPS_SS_PORT="$decoded_vps_ss_port"
+  HOME_SS_PORT="$decoded_home_ss_port"
+  HOME_BACKEND="$decoded_backend"
+  MODE="$decoded_mode"
+  PUBLIC_SS_ENABLED="$decoded_public_ss"
+  SS_PASSWORD="$decoded_password"
+  PAIR_PEER_PUBLIC_KEY="$decoded_public_key"
   PAIR_CODE_LOADED="1"
 }
 
@@ -928,11 +970,15 @@ fi
 
 if [[ "$FULL_STACK" == "1" && "$ROLE" == "home" ]]; then
   echo "请先在 VPS 窗口运行到显示配对码。"
-  read -r -p "粘贴 VPS 一行配对码（留空改为逐项手动填写）：" pair_code_answer
-  if [[ -n "$pair_code_answer" ]]; then
-    load_pair_code "$pair_code_answer"
-    echo "配对码读取成功：$DISPLAY_NAME ($NODE_ID)"
-  fi
+  while true; do
+    read -r -p "粘贴 VPS 一行配对码（留空改为逐项手动填写）：" pair_code_answer
+    [[ -n "$pair_code_answer" ]] || break
+    if load_pair_code "$pair_code_answer"; then
+      echo "配对码读取成功：$DISPLAY_NAME ($NODE_ID)"
+      break
+    fi
+    echo "请重新粘贴完整配对码；按 Ctrl+C 可退出向导。"
+  done
 fi
 
 default_node="$(next_node_id)"
@@ -1107,7 +1153,7 @@ select_available_wg_prefix
 select_available_local_ports
 
 if [[ "$FULL_STACK" == "1" && "$ROLE" == "vps" && -z "$SS_PASSWORD" ]]; then
-  SS_PASSWORD="$(dd if=/dev/urandom bs=16 count=1 2>/dev/null | base64 | tr -d '\r\n')"
+  SS_PASSWORD="$(dd if=/dev/urandom bs=16 count=1 2>/dev/null | base64_encode_stream | tr -d '\r\n')"
 fi
 
 check_network_collision
