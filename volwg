@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 REPO_RAW_URL="https://raw.githubusercontent.com/chnnic/volwg/main"
-BUILTIN_VERSION="1.4.6"
+BUILTIN_VERSION="1.4.7"
 
 find_lib_dir() {
   local launcher_dir user_data_dir
@@ -194,26 +194,45 @@ confirm_wireguard_only() {
   echo "  - 不生成 SS 链接，也不创建公网 SS 转发"
   echo
   echo "需要完整家宽落地线路，请返回选择："
-  echo "  1) 完整部署：WireGuard + SS2022（推荐）"
+  echo "  1) 双 SSH 窗口完整部署（推荐）"
   echo
   read -r -p "输入 1 继续仅 WireGuard，输入 0 返回 [0]：" answer
   [[ "$answer" == "1" ]]
 }
 
 deployment_menu() {
-  local choice
+  local choice pair_role
   while true; do
     clear_screen
     print_header
     print_menu_title "主菜单 > 新建线路与配对"
-    echo "  1) 完整部署：WireGuard + SS2022（推荐）"
-    echo "     自动在家宽机安装 ss-rust 或 Xray，并生成 SS 链接"
+    echo "  1) 双 SSH 窗口完整部署（推荐）"
+    echo "     家宽机主动连接 VPS；无需公网 IP，也无需两端互相 SSH"
     echo "  2) 仅 WireGuard：当前机器是 VPS"
     echo "  3) 仅 WireGuard：当前机器是家宽机"
+    echo "  4) 控制端远程全自动部署"
+    echo "     仅适合当前控制机能分别 SSH 到 VPS 和家宽机"
     echo "  0) 返回主菜单    q) 退出"
-    read -r -p "请选择 [0-3/q]：" choice
+    read -r -p "请选择 [0-4/q]：" choice
     case "$choice" in
-      1) bash "$LIB_DIR/wg-home-deploy.sh" --guided; pause_screen ;;
+      1)
+        clear_screen
+        print_header
+        print_menu_title "主菜单 > 新建线路与配对 > 双窗口完整部署"
+        echo "请在 VPS 和家宽机两个 SSH 窗口都安装 VolWG。"
+        echo "两端各自配置本机，只交换 WireGuard 公钥和 SS2022 密钥。"
+        echo
+        echo "  1) 当前窗口是公网/优化 VPS"
+        echo "  2) 当前窗口是家宽机"
+        echo "  0) 返回"
+        read -r -p "请选择 [0-2]：" pair_role
+        case "$pair_role" in
+          1) bash "$LIB_DIR/wg-home-key-wizard.sh" --full --role vps; pause_screen ;;
+          2) bash "$LIB_DIR/wg-home-key-wizard.sh" --full --role home; pause_screen ;;
+          0) ;;
+          *) echo "选择无效。"; pause_screen ;;
+        esac
+        ;;
       2)
         if confirm_wireguard_only "VPS"; then
           bash "$LIB_DIR/wg-home-key-wizard.sh" --role vps
@@ -226,6 +245,7 @@ deployment_menu() {
           pause_screen
         fi
         ;;
+      4) bash "$LIB_DIR/wg-home-deploy.sh" --guided; pause_screen ;;
       0) return ;;
       q|Q) clear_screen; exit 0 ;;
       *) echo "选择无效。"; pause_screen ;;
@@ -290,7 +310,8 @@ show_help() {
   cat <<'EOF'
 VolWG 命令：
   volwg                    打开多级引导界面
-  volwg deploy [参数]      完整部署 WireGuard + SS2022 线路
+  volwg pair [参数]        双 SSH 窗口完整部署；在两端各自执行
+  volwg deploy [参数]      控制端远程部署；要求能 SSH 到两端
   volwg manager            打开本机线路管理界面
   volwg manager links      查看本机保存的全部 SS 链接
   volwg key [参数]         仅 WireGuard：双 SSH 窗口公钥向导
@@ -333,6 +354,7 @@ case "$subcommand" in
     exec bash "$LIB_DIR/wg-home-manager.sh" "$@"
     ;;
   key) shift; exec bash "$LIB_DIR/wg-home-key-wizard.sh" "$@" ;;
+  pair) shift; exec bash "$LIB_DIR/wg-home-key-wizard.sh" --full "$@" ;;
   remove|delete) shift; exec bash "$LIB_DIR/wg-home-remove.sh" "$@" ;;
   deploy) shift; exec bash "$LIB_DIR/wg-home-deploy.sh" "$@" ;;
   version) show_version ;;

@@ -133,15 +133,35 @@ Debian LXC 可以作为家宽端或中转端使用，但容器必须拥有 `NET_
 
 “新建线路与配对”子菜单：
 
-    1) 完整部署：WireGuard + SS2022（推荐）
-       自动在家宽机安装 ss-rust 或 Xray，并生成 SS 链接
+    1) 双 SSH 窗口完整部署（推荐）
+       家宽机主动连接 VPS；无需公网 IP，也无需两端互相 SSH
     2) 仅 WireGuard：当前机器是 VPS
     3) 仅 WireGuard：当前机器是家宽机
+    4) 控制端远程全自动部署
+       仅适合当前控制机能分别 SSH 到 VPS 和家宽机
     0) 返回主菜单
 
-选择完整部署后，向导按“线路信息 → 家宽 SS 后端 → SSH 连接 → WireGuard 网络 → Shadowsocks 入口”收集配置，不需要记忆命令行参数。`ss-rust/Xray Core` 选择只决定家宽机安装哪个 SS2022 服务端；VPS 始终只安装 WireGuard 与 nftables。
+默认推荐“双 SSH 窗口完整部署”。分别在 VPS 和家宽机的 SSH 窗口运行 `volwg`，选择当前机器角色；两端各自只配置本机。家宽机主动连接 VPS，因此不需要公网 IP、FRP、端口映射，也不需要让 VPS 登录家宽机。两个窗口只复制 WireGuard 公钥和向导生成的 SS2022 AES-128 密钥，SSH 私钥不会交换。
 
-选择第 2/3 项前，界面会再次提示“仅 WireGuard”不会安装 ss-rust/Xray、不会生成 SS 链接。只有明确输入 `1` 确认后才会进入公钥配对，避免把它误认为完整部署。
+也可以直接在两端分别运行：
+
+    sudo volwg pair --role vps
+    sudo volwg pair --role home
+
+VPS 只安装 WireGuard 与 nftables；家宽机安装 WireGuard，并可选择 `ss-rust ssserver` 或 Xray Core 作为 SS2022 服务端。完成后 VPS 窗口保存并显示公网、WireGuard 私网两套 SS 链接。
+
+放在菜单末尾的“控制端远程全自动部署”适合第三台控制机或具备现成管理网络的环境。它按“线路信息 → 家宽 SS 后端 → SSH 连接 → WireGuard 网络 → Shadowsocks 入口”收集配置。
+
+完整远程部署要求“当前运行 VolWG 的机器”能够分别 SSH 到 VPS 和家宽机。家宽机不要求拥有公网 IP：可填写 FRP 域名与映射端口、路由器端口映射、同一 LAN 地址，或者 Tailscale/其他 VPN 地址。若完全不存在可达的 SSH 路径，远程完整部署无法操作家宽机，向导会在写入配置前停止并说明原因。
+
+VPS 与家宽机可以使用不同 SSH 私钥。交互向导会分别询问两个私钥路径；留空时分别使用 ssh-agent 或 `~/.ssh/config`。命令行对应参数为：
+
+    --vps-identity /path/to/vps_key
+    --home-identity /path/to/home_key
+
+兼容参数 `--identity` 仍表示两端共用同一个私钥。
+
+选择第 2/3 项前，界面会再次提示“仅 WireGuard”不会安装 ss-rust/Xray、不会生成 SS 链接。只有明确输入 `1` 确认后才会进入纯 WireGuard 公钥配对。
 
 在线路管理中选择本机管理时，VolWG 会直接打开本机线路后台，不再要求重复输入本机 SSH；也可以选择连接远程 VPS 管理。
 
@@ -209,7 +229,36 @@ Debian LXC 可以作为家宽端或中转端使用，但容器必须拥有 `NET_
 
 旧版 VPS 只保存 WireGuard 和转发规则，没有保存 SS 密钥，因此首次登记需要粘贴原来的 SS 链接；登记后便会长期保存在后台。
 
-## 双 SSH 窗口交换公钥
+## 双 SSH 窗口完整部署
+
+这是 NAT/CGNAT 家宽的默认推荐方式。先在 VPS 窗口选择：
+
+    2) 新建线路与配对
+    1) 双 SSH 窗口完整部署
+    1) 当前窗口是公网/优化 VPS
+
+VPS 窗口会显示其 WireGuard 公钥、endpoint、最终端口和一条 SS2022 AES-128 密钥，并等待家宽公钥。
+
+再在家宽机窗口选择：
+
+    2) 新建线路与配对
+    1) 双 SSH 窗口完整部署
+    2) 当前窗口是家宽机
+
+按 VPS 窗口显示的最终参数填写，把两端 WireGuard 公钥互相复制，并把 VPS 生成的 SS2022 密钥粘贴到家宽窗口。家宽机会主动发起 WireGuard 连接；整个过程不会要求家宽公网 IP、家宽 SSH 地址或 SSH 私钥路径。
+
+两端都会自动避让本机已使用的端口。若家宽窗口调整了 SS2022 端口，VPS 窗口会在写入转发前再次询问家宽最终端口。部署完成后：
+
+- VPS：运行 WireGuard 和 nftables，并保存公网/私网 SS 链接。
+- 家宽机：运行 WireGuard 和所选的 ss-rust/Xray SS2022 服务端。
+- 家宽机位于内网，不接受 VPS 的 SSH 登录。
+
+命令行快捷入口：
+
+    sudo volwg pair --role vps
+    sudo volwg pair --role home
+
+## 双 SSH 窗口仅 WireGuard
 
 将仓库放到两台机器后，同时打开两个 SSH 窗口。手动配对现在支持多个节点，每条线路使用独立的 `wgh_节点ID` 接口、密钥和配置，不再共用或覆盖固定的 `wg-home`。
 
@@ -250,7 +299,7 @@ Debian LXC 可以作为家宽端或中转端使用，但容器必须拥有 `NET_
     sudo ./volwg key --role vps
     sudo ./volwg key --role home
 
-手动配对只配置 WireGuard。如果还需要自动安装 ss-rust/Xray、生成公网与私网 SS 链接，请选择“完整部署：WireGuard + SS2022”。
+`volwg key` 只配置 WireGuard。如果需要自动安装 ss-rust/Xray、生成公网与私网 SS 链接，请使用上面的 `volwg pair`。
 
 OpenWrt 首次安装 WireGuard 后，向导会提示运行：
 
@@ -273,7 +322,8 @@ SSH 可能短暂断开，重新连接后使用以下命令检查：
       --vps-wg-port 51830 --home-wg-port 45000 \
       --vps-ss-port 31000 --home-ss-port 32000 \
       --home-backend ss-rust \
-      --identity ~/.ssh/id_ed25519
+      --vps-identity ~/.ssh/vps_ed25519 \
+      --home-identity ~/.ssh/home_ed25519
 
 优化机直连：
 
@@ -285,7 +335,8 @@ SSH 可能短暂断开，重新连接后使用以下命令检查：
       --vps-wg-port 51831 --home-wg-port 45001 \
       --vps-ss-port 31001 --home-ss-port 32001 \
       --home-backend ss-rust \
-      --identity ~/.ssh/id_ed25519
+      --vps-identity ~/.ssh/vps_ed25519 \
+      --home-identity ~/.ssh/home_ed25519
 
 查看所有参数：
 
@@ -360,7 +411,7 @@ SS2022、SSH 私钥和 WireGuard 私钥均属于敏感信息，不要公开。
 - install.sh：一键下载和启动入口。
 - volwg：安装后的统一快捷入口。
 - wg-home-deploy.sh：完整部署脚本和引导式入口。
-- wg-home-key-wizard.sh：双 SSH 窗口 WireGuard 公钥交换向导。
+- wg-home-key-wizard.sh：双 SSH 窗口完整部署及纯 WireGuard 公钥交换向导。
 - wg-home-manager.sh：安装到 VPS 的多线路查看和 SS 链接管理后台。
 - wg-home-remove.sh：按节点停止服务并归档删除 VPS/家宽端配置。
 

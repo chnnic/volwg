@@ -37,16 +37,34 @@ grep -Fq -- '--node ID' < <(bash "$ROOT_DIR/wg-home-key-wizard.sh" --help)
 grep -Fq '自动向后寻找可用端口' < <(bash "$ROOT_DIR/wg-home-key-wizard.sh" --help)
 grep -Fq 'volwg remove --node' < <(bash "$ROOT_DIR/wg-home-remove.sh" --help)
 grep -Fq 'wg-home-remove.sh' "$ROOT_DIR/install.sh"
-grep -Fq '完整部署：WireGuard + SS2022' "$ROOT_DIR/volwg"
+grep -Fq '双 SSH 窗口完整部署（推荐）' "$ROOT_DIR/volwg"
+grep -Fq '控制端远程全自动部署' "$ROOT_DIR/volwg"
+grep -Fq 'volwg pair [参数]' "$ROOT_DIR/volwg"
+grep -Fq -- '--full' < <(bash "$ROOT_DIR/wg-home-key-wizard.sh" --help)
+grep -Fq '不需要两端互相 SSH' "$ROOT_DIR/wg-home-key-wizard.sh"
+grep -Fq 'SS2022 AES-128 密钥' "$ROOT_DIR/wg-home-key-wizard.sh"
 grep -Fq '不安装 ss-rust' "$ROOT_DIR/volwg"
 grep -Fq '当前模式：仅 WireGuard 手动配对' "$ROOT_DIR/wg-home-key-wizard.sh"
 grep -Fq '组件安装位置' "$ROOT_DIR/wg-home-deploy.sh"
-grep -Fq 'BUILTIN_VERSION="1.4.6"' "$ROOT_DIR/volwg"
-grep -Fxq '1.4.6' "$ROOT_DIR/VERSION"
+grep -Fq -- '--vps-identity PATH' "$ROOT_DIR/wg-home-deploy.sh"
+grep -Fq -- '--home-identity PATH' "$ROOT_DIR/wg-home-deploy.sh"
+grep -Fq 'FRP、端口映射、LAN 或 VPN/Tailscale 地址' "$ROOT_DIR/wg-home-deploy.sh"
+grep -Fq 'VPS SSH 私钥路径' "$ROOT_DIR/wg-home-deploy.sh"
+grep -Fq '家宽机 SSH 私钥路径' "$ROOT_DIR/wg-home-deploy.sh"
+grep -Fq 'BUILTIN_VERSION="1.4.7"' "$ROOT_DIR/volwg"
+grep -Fxq '1.4.7' "$ROOT_DIR/VERSION"
 
 menu_output="$(printf '2\n2\n0\n0\n0\n' | "$ROOT_DIR/volwg")"
 grep -Fq '此模式只会' <<<"$menu_output"
 grep -Fq '不安装 ss-rust' <<<"$menu_output"
 grep -Fq '需要完整家宽落地线路' <<<"$menu_output"
+
+deploy_menu_output="$(printf '2\n0\n0\n' | "$ROOT_DIR/volwg")"
+pair_line="$(grep -n -m1 '双 SSH 窗口完整部署（推荐）' <<<"$deploy_menu_output" | cut -d: -f1)"
+remote_line="$(grep -n -m1 '控制端远程全自动部署' <<<"$deploy_menu_output" | cut -d: -f1)"
+[[ -n "$pair_line" && -n "$remote_line" && "$pair_line" -lt "$remote_line" ]]
+if grep -Fq '控制端远程全自动部署（推荐）' <<<"$deploy_menu_output"; then
+  exit 1
+fi
 
 echo "VolWG tests: PASS"

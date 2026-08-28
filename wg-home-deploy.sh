@@ -13,6 +13,8 @@ VPS_PUBLIC_HOST=""
 OPENWRT_TARGET=""
 OPENWRT_SSH_PORT="22"
 IDENTITY=""
+VPS_IDENTITY=""
+HOME_IDENTITY=""
 VPS_WG_PORT="51830"
 HOME_WG_PORT="51830"
 VPS_SS_PORT="31000"
@@ -52,7 +54,9 @@ usage() {
   --home-ssh-port PORT      家宽机 SSH 端口，默认 22
   --openwrt USER@HOST       --home 的兼容别名
   --openwrt-ssh-port PORT   --home-ssh-port 的兼容别名
-  --identity PATH           SSH 私钥路径；省略则使用 ssh-agent/~/.ssh/config
+  --vps-identity PATH       登录 VPS 的 SSH 私钥；省略则使用 ssh-agent/SSH config
+  --home-identity PATH      登录家宽机的 SSH 私钥；省略则使用 ssh-agent/SSH config
+  --identity PATH           兼容选项：两端使用同一个 SSH 私钥
   --vps-wg-port PORT        VPS WireGuard 公网 UDP 起始端口，默认 51830
   --home-wg-port PORT       家宽机 WireGuard 本地 UDP 起始端口，默认 51830
   --vps-ss-port PORT        VPS 公网 SS 起始端口，默认 31000
@@ -145,7 +149,14 @@ confirm_wireguard_only() {
 }
 
 guided_full_deploy() {
-  local mode_choice backend_choice public_ss_choice identity_answer default_public_host node_answer name_answer
+  local mode_choice backend_choice public_ss_choice default_public_host node_answer name_answer
+
+  echo
+  echo "完整部署的连接要求："
+  echo "  - 当前运行 VolWG 的机器必须能够 SSH 到 VPS 和家宽机。"
+  echo "  - 家宽机不需要公网 IP，可以填写 FRP、端口映射、LAN 或 VPN/Tailscale 地址。"
+  echo "  - 如果当前机器完全无法 SSH 到家宽机，请不要继续此远程部署流程。"
+  echo "  - VPS 与家宽机可以分别使用不同的 SSH 私钥。"
 
   echo
   echo "[1/4] 线路基本信息"
@@ -189,12 +200,14 @@ guided_full_deploy() {
   echo "------------------------------------------------------------"
   VPS_TARGET="$(prompt_required "公网/优化 VPS SSH，例如 root@203.0.113.10")"
   VPS_SSH_PORT="$(prompt_with_default "VPS SSH 端口" "$VPS_SSH_PORT")"
+  read -r -p "VPS SSH 私钥路径（留空使用 ssh-agent/SSH config）：" VPS_IDENTITY
   default_public_host="${VPS_TARGET#*@}"
   VPS_PUBLIC_HOST="$(prompt_with_default "VPS 公网 IP 或域名" "$default_public_host")"
-  OPENWRT_TARGET="$(prompt_required "家宽机 SSH，例如 root@home.example.com")"
-  OPENWRT_SSH_PORT="$(prompt_with_default "家宽机 SSH 端口" "$OPENWRT_SSH_PORT")"
-  read -r -p "SSH 私钥路径（留空使用 ssh-agent/~/.ssh/config）：" identity_answer
-  IDENTITY="$identity_answer"
+  echo
+  echo "家宽机位于 NAT/CGNAT 后面时，请填写可达的 FRP、映射端口、LAN 或 VPN 地址。"
+  OPENWRT_TARGET="$(prompt_required "家宽机可达 SSH 地址，例如 root@frp.example.com")"
+  OPENWRT_SSH_PORT="$(prompt_with_default "家宽机可达 SSH 端口（例如 FRP 映射端口）" "$OPENWRT_SSH_PORT")"
+  read -r -p "家宽机 SSH 私钥路径（留空使用 ssh-agent/SSH config）：" HOME_IDENTITY
 
   echo
   echo "[3/4] WireGuard 网络"
@@ -221,50 +234,11 @@ guided_full_deploy() {
 }
 
 if (($# == 0)); then
-  echo "============================================================"
-  echo " VolWG 多线路家宽落地部署向导"
-  echo "============================================================"
-  echo "  1) 完整部署：WireGuard + SS2022（推荐）"
-  echo "  2) 管理已部署线路"
-  echo "  3) 仅 WireGuard：当前机器是 VPS"
-  echo "  4) 仅 WireGuard：当前机器是家宽机"
-  echo "  5) 查看帮助"
-  echo "  0) 退出"
-  read -r -p "请选择 [0-5]：" entry_choice
-  case "$entry_choice" in
-    1) GUIDED="1" ;;
-    2)
-      if [[ -d /etc/wg-home-exit/nodes || -f /etc/wireguard/wg-home.conf ]] || compgen -G '/etc/wireguard/wgh_*.conf' >/dev/null; then
-        exec bash "$SCRIPT_DIR/wg-home-manager.sh" menu
-      fi
-      echo "本机没有检测到 VolWG/WireGuard 线路，将连接另一台 VPS。"
-      manager_vps="$(prompt_required "VPS SSH，例如 root@203.0.113.10")"
-      manager_port="$(prompt_with_default "VPS SSH 端口" "22")"
-      read -r -p "SSH 私钥路径（留空使用 ssh-agent/~/.ssh/config）：" manager_identity
-      manager_ssh=(-o ConnectTimeout=12 -o StrictHostKeyChecking=accept-new -p "$manager_port")
-      if [[ -n "$manager_identity" ]]; then
-        manager_ssh+=(-i "$manager_identity" -o IdentitiesOnly=yes)
-      fi
-      exec ssh -t "${manager_ssh[@]}" "$manager_vps" "wg-home-manager menu"
-      ;;
-    3)
-      [[ -f "$SCRIPT_DIR/wg-home-key-wizard.sh" ]] || die "缺少 wg-home-key-wizard.sh"
-      if confirm_wireguard_only "VPS"; then
-        exec bash "$SCRIPT_DIR/wg-home-key-wizard.sh" --role vps
-      fi
-      exit 0
-      ;;
-    4)
-      [[ -f "$SCRIPT_DIR/wg-home-key-wizard.sh" ]] || die "缺少 wg-home-key-wizard.sh"
-      if confirm_wireguard_only "家宽机"; then
-        exec bash "$SCRIPT_DIR/wg-home-key-wizard.sh" --role home
-      fi
-      exit 0
-      ;;
-    5) usage; exit 0 ;;
-    0) exit 0 ;;
-    *) die "入口选择无效" ;;
-  esac
+  if [[ -f "$SCRIPT_DIR/volwg" ]]; then
+    exec bash "$SCRIPT_DIR/volwg"
+  fi
+  usage
+  exit 0
 fi
 
 while (($#)); do
@@ -278,6 +252,8 @@ while (($#)); do
     --home|--openwrt) OPENWRT_TARGET="${2:-}"; shift 2 ;;
     --home-ssh-port|--openwrt-ssh-port) OPENWRT_SSH_PORT="${2:-}"; shift 2 ;;
     --identity) IDENTITY="${2:-}"; shift 2 ;;
+    --vps-identity) VPS_IDENTITY="${2:-}"; shift 2 ;;
+    --home-identity) HOME_IDENTITY="${2:-}"; shift 2 ;;
     --vps-wg-port) VPS_WG_PORT="${2:-}"; shift 2 ;;
     --home-wg-port) HOME_WG_PORT="${2:-}"; shift 2 ;;
     --vps-ss-port) VPS_SS_PORT="${2:-}"; shift 2 ;;
@@ -304,6 +280,10 @@ done
 
 if [[ "$GUIDED" == "1" ]]; then
   guided_full_deploy
+fi
+if [[ -n "$IDENTITY" ]]; then
+  [[ -n "$VPS_IDENTITY" ]] || VPS_IDENTITY="$IDENTITY"
+  [[ -n "$HOME_IDENTITY" ]] || HOME_IDENTITY="$IDENTITY"
 fi
 if [[ "$AUTO_DISPLAY_NAME" == "1" ]]; then
   DISPLAY_NAME="家宽线路 $NODE_ID"
@@ -351,8 +331,11 @@ for command_name in ssh scp openssl mktemp sed awk base64; do
   command -v "$command_name" >/dev/null || die "本机缺少命令：$command_name"
 done
 
-if [[ -n "$IDENTITY" ]]; then
-  [[ -f "$IDENTITY" ]] || die "SSH 私钥不存在：$IDENTITY"
+if [[ -n "$VPS_IDENTITY" ]]; then
+  [[ -f "$VPS_IDENTITY" ]] || die "VPS SSH 私钥不存在：$VPS_IDENTITY"
+fi
+if [[ -n "$HOME_IDENTITY" ]]; then
+  [[ -f "$HOME_IDENTITY" ]] || die "家宽机 SSH 私钥不存在：$HOME_IDENTITY"
 fi
 [[ -f "$SCRIPT_DIR/wg-home-manager.sh" ]] || die "缺少 wg-home-manager.sh；请使用仓库完整版或一键安装命令"
 [[ -f "$SCRIPT_DIR/wg-home-key-wizard.sh" ]] || die "缺少 wg-home-key-wizard.sh；请使用仓库完整版或一键安装命令"
@@ -360,23 +343,28 @@ fi
 [[ -f "$SCRIPT_DIR/volwg" ]] || die "缺少 volwg 快捷入口；请使用仓库完整版或一键安装命令"
 [[ -f "$SCRIPT_DIR/VERSION" ]] || die "缺少 VERSION；请使用仓库完整版或一键安装命令"
 
-SSH_COMMON=(
+SSH_BASE=(
   -o BatchMode=yes
   -o ConnectTimeout=12
   -o ServerAliveInterval=5
   -o ServerAliveCountMax=3
   -o StrictHostKeyChecking=accept-new
 )
-if [[ -n "$IDENTITY" ]]; then
-  SSH_COMMON+=(-i "$IDENTITY" -o IdentitiesOnly=yes)
+VPS_SSH_ARGS=("${SSH_BASE[@]}")
+HOME_SSH_ARGS=("${SSH_BASE[@]}")
+if [[ -n "$VPS_IDENTITY" ]]; then
+  VPS_SSH_ARGS+=(-i "$VPS_IDENTITY" -o IdentitiesOnly=yes)
+fi
+if [[ -n "$HOME_IDENTITY" ]]; then
+  HOME_SSH_ARGS+=(-i "$HOME_IDENTITY" -o IdentitiesOnly=yes)
 fi
 
 ssh_vps() {
-  ssh "${SSH_COMMON[@]}" -p "$VPS_SSH_PORT" "$VPS_TARGET" "$@"
+  ssh "${VPS_SSH_ARGS[@]}" -p "$VPS_SSH_PORT" "$VPS_TARGET" "$@"
 }
 
 ssh_openwrt() {
-  ssh "${SSH_COMMON[@]}" -p "$OPENWRT_SSH_PORT" "$OPENWRT_TARGET" "$@"
+  ssh "${HOME_SSH_ARGS[@]}" -p "$OPENWRT_SSH_PORT" "$OPENWRT_TARGET" "$@"
 }
 
 find_remote_free_node_id() {
@@ -420,12 +408,16 @@ detect_remote_public_ipv4() {
 }
 
 scp_vps() {
-  scp "${SSH_COMMON[@]}" -P "$VPS_SSH_PORT" "$1" "$VPS_TARGET:$2"
+  scp "${VPS_SSH_ARGS[@]}" -P "$VPS_SSH_PORT" "$1" "$VPS_TARGET:$2"
 }
 
 scp_openwrt() {
-  scp -O "${SSH_COMMON[@]}" -P "$OPENWRT_SSH_PORT" "$1" "$OPENWRT_TARGET:$2"
+  scp -O "${HOME_SSH_ARGS[@]}" -P "$OPENWRT_SSH_PORT" "$1" "$OPENWRT_TARGET:$2"
 }
+
+echo "正在验证两端 SSH 密钥连接..."
+ssh_vps "true" >/dev/null 2>&1 || die "无法使用指定密钥连接 VPS。请检查 VPS 地址、SSH 端口、私钥或 ssh-agent。"
+ssh_openwrt "true" >/dev/null 2>&1 || die "当前机器无法通过 SSH 到达家宽机。家宽机不需要公网 IP，但必须提供可达的 FRP、端口映射、LAN 或 VPN 地址，并检查家宽机专用私钥。"
 
 if [[ "$AUTO_NODE_ID" == "1" && "$REPLACE_NODE" != "1" ]]; then
   original_node="$NODE_ID"
