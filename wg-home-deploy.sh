@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 # Debian/Ubuntu 公网 VPS + 家宽机一键部署。
-# 家宽端支持 OpenWrt/ImmortalWrt、Debian 12/13、Ubuntu。
+# 家宽端支持 OpenWrt/ImmortalWrt、Debian 11/12/13、Ubuntu。
 #   relay  - 推荐使用公网 SS 链接，同时也生成 WireGuard 私网链接
 #   direct - 推荐使用 WireGuard 私网链接，同时也可生成公网 SS 链接
 
@@ -41,7 +41,7 @@ usage() {
   --vps USER@HOST          可 SSH/root 的 Debian 或 Ubuntu VPS
   --vps-public-host HOST   WireGuard endpoint，也是公网 SS 链接地址
   --home USER@HOST         可 SSH/root 的家宽机
-                            支持 OpenWrt/ImmortalWrt、Debian 12/13、Ubuntu
+                            支持 OpenWrt/ImmortalWrt、Debian 11/12/13、Ubuntu
 
 选项：
   --node ID                 节点 ID，1-8 位小写字母/数字/_，默认 home1
@@ -93,6 +93,27 @@ EOF
 die() {
   echo "错误：$*" >&2
   exit 1
+}
+
+check_remote_wireguard() {
+  local label="$1" ssh_function="$2" result
+  # 下面的变量必须在远程机器展开。
+  # shellcheck disable=SC2016
+  if ! result="$($ssh_function 'set -u
+test_iface="vwgcap$$"
+cleanup_test_iface() {
+  ip link del "$test_iface" >/dev/null 2>&1 || true
+}
+trap cleanup_test_iface EXIT INT TERM
+virt="$(systemd-detect-virt 2>/dev/null || true)"
+if ! ip link add "$test_iface" type wireguard 2>&1; then
+  echo "virtualization=${virt:-none}"
+  exit 1
+fi
+ip link del "$test_iface"
+trap - EXIT INT TERM' 2>&1)"; then
+    die "$label 无法创建 WireGuard 接口。若它是 LXC，请确认容器拥有 NET_ADMIN，且宿主机内核已启用 WireGuard。原始输出：$result"
+  fi
 }
 
 prompt_required() {
@@ -402,8 +423,8 @@ vps_os="$(ssh_vps '. /etc/os-release 2>/dev/null; printf "%s" "${ID:-unknown}"')
 [[ "$vps_os" == "debian" || "$vps_os" == "ubuntu" ]] || die "VPS 仅支持 Debian/Ubuntu，检测到：$vps_os"
 # 系统变量必须在远程家宽机展开。
 # shellcheck disable=SC2016
-home_kind="$(ssh_openwrt 'if command -v uci >/dev/null 2>&1 && command -v opkg >/dev/null 2>&1; then echo openwrt; elif test -r /etc/os-release && command -v systemctl >/dev/null 2>&1; then . /etc/os-release; case "${ID:-}:${VERSION_ID:-}" in debian:12|debian:13|ubuntu:*) echo linux ;; *) echo unsupported ;; esac; else echo unsupported; fi')"
-[[ "$home_kind" == "openwrt" || "$home_kind" == "linux" ]] || die "家宽端仅支持 OpenWrt/ImmortalWrt、Debian 12/13 或 Ubuntu"
+home_kind="$(ssh_openwrt 'if command -v uci >/dev/null 2>&1 && command -v opkg >/dev/null 2>&1; then echo openwrt; elif test -r /etc/os-release && command -v systemctl >/dev/null 2>&1; then . /etc/os-release; case "${ID:-}:${VERSION_ID:-}" in debian:11|debian:12|debian:13|ubuntu:*) echo linux ;; *) echo unsupported ;; esac; else echo unsupported; fi')"
+[[ "$home_kind" == "openwrt" || "$home_kind" == "linux" ]] || die "家宽端仅支持 OpenWrt/ImmortalWrt、Debian 11/12/13 或 Ubuntu"
 echo "检测到家宽端类型：$home_kind"
 
 if [[ "$REPLACE_NODE" != "1" ]] && ssh_vps "test -e '/etc/wireguard/$WG_IFACE.conf' || test -e '/etc/wg-home-exit/nodes/$NODE_ID.conf'"; then
@@ -515,6 +536,10 @@ else
   fi
 fi
 ssh_openwrt "command -v wg >/dev/null" || die "家宽端 wireguard-tools 安装失败"
+check_remote_wireguard "VPS" ssh_vps
+if [[ "$home_kind" == "linux" ]]; then
+  check_remote_wireguard "家宽端" ssh_openwrt
+fi
 if [[ "$HOME_BACKEND" == "ss-rust" ]]; then
   scp_openwrt "$TMP_DIR/install-ssserver" /tmp/volwg-install-ssserver
   ssh_openwrt "set -eu; chmod 700 /tmp/volwg-install-ssserver; /tmp/volwg-install-ssserver; rm -f /tmp/volwg-install-ssserver"

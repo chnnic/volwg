@@ -51,12 +51,15 @@ root 用户安装到 `/usr/local/bin/volwg`；OpenWrt root 安装到 `/usr/bin/v
 家宽端：
 
 - OpenWrt / ImmortalWrt
+- Debian 11
 - Debian 12
 - Debian 13
 - Ubuntu
 - 必须拥有 root/SSH
 
 脚本会自动安装 WireGuard，并允许在家宽端选择 `ss-rust ssserver` 或 Xray Core。默认推荐轻量的 `ss-rust`；选择 Xray 时，Linux 使用 XTLS 官方安装器。
+
+Debian LXC 可以作为家宽端或中转端使用，但容器必须拥有 `NET_ADMIN`，并且宿主机内核必须启用 WireGuard。中转端还必须允许 nftables/NAT 和 IPv4 转发。部署前脚本会临时创建并立即删除一个测试接口；能力不足时会显示 LXC/内核相关的明确错误，不会继续写入线路配置。
 
 ## 家宽服务端选择
 
@@ -335,5 +338,5 @@ SS2022、SSH 私钥和 WireGuard 私钥均属于敏感信息，不要公开。
 - 更换家宽公网 IP 后节点参数不变，WireGuard 会自动重新握手。
 - 家宽网络必须允许连接 VPS 的 WireGuard UDP 端口。
 - OpenWrt 会备份 /etc/config/network 和 /etc/config/firewall。
-- Debian/Ubuntu 会备份已有的 wg-home 和 xray-wg-home 配置。
+- Debian 11/12/13、Ubuntu 会备份已有的 wg-home 和 xray-wg-home 配置。
 - 首次运行前建议确认默认网段和端口没有被占用。

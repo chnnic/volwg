@@ -19,7 +19,7 @@ usage() {
 
 支持：
   VPS：Debian、Ubuntu
-  家宽机：OpenWrt/ImmortalWrt、Debian 12/13、Ubuntu
+  家宽机：OpenWrt/ImmortalWrt、Debian 11/12/13、Ubuntu
 
 选项：
   --role vps|home
@@ -88,8 +88,8 @@ elif [[ -r /etc/os-release ]] && command -v systemctl >/dev/null 2>&1; then
   # shellcheck disable=SC1091
   . /etc/os-release
   case "${ID:-}:${VERSION_ID:-}" in
-    debian:12|debian:13|ubuntu:*) SYSTEM_KIND="linux" ;;
-    *) die "Linux 仅支持 Debian 12/13 或 Ubuntu" ;;
+    debian:11|debian:12|debian:13|ubuntu:*) SYSTEM_KIND="linux" ;;
+    *) die "Linux 仅支持 Debian 11/12/13 或 Ubuntu" ;;
   esac
 else
   die "不支持当前系统"
@@ -115,6 +115,20 @@ else
   echo "[2/4] WireGuard 已安装"
 fi
 command -v wg >/dev/null || die "WireGuard 安装失败"
+
+if [[ "$SYSTEM_KIND" == "linux" ]]; then
+  test_iface="vwgcap$$"
+  cleanup_test_iface() {
+    ip link del "$test_iface" >/dev/null 2>&1 || true
+  }
+  trap cleanup_test_iface EXIT INT TERM
+  if ! wg_capability_error="$(ip link add "$test_iface" type wireguard 2>&1)"; then
+    virtualization="$(systemd-detect-virt 2>/dev/null || true)"
+    die "无法创建 WireGuard 接口。若当前系统是 LXC，请确认容器拥有 NET_ADMIN，且宿主机内核已启用 WireGuard。虚拟化：${virtualization:-none}；原始输出：$wg_capability_error"
+  fi
+  ip link del "$test_iface"
+  trap - EXIT INT TERM
+fi
 
 mkdir -p /etc/wireguard
 chmod 700 /etc/wireguard
