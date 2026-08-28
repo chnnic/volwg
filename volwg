@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 REPO_RAW_URL="https://raw.githubusercontent.com/chnnic/volwg/main"
-BUILTIN_VERSION="1.4.4"
+BUILTIN_VERSION="1.4.5"
 
 find_lib_dir() {
   local launcher_dir user_data_dir
@@ -87,10 +87,17 @@ EOF
 }
 
 local_node_count() {
-  local -a files
+  local file id count
+  local -a files manual_files
   shopt -s nullglob
   files=(/etc/wg-home-exit/nodes/*.conf)
-  printf '%s' "${#files[@]}"
+  manual_files=(/etc/wg-home-exit/manual/*.conf)
+  count="${#files[@]}"
+  for file in "${manual_files[@]}"; do
+    id="$(sed -n 's/^NODE_ID=//p' "$file" | head -n 1)"
+    [[ -f "/etc/wg-home-exit/nodes/$id.conf" ]] || ((count++)) || true
+  done
+  printf '%s' "$count"
 }
 
 print_menu_title() {
@@ -176,8 +183,8 @@ deployment_menu() {
     print_header
     print_menu_title "主菜单 > 新建线路与配对"
     echo "  1) 全自动部署新线路（推荐）"
-    echo "  2) 手动配对：当前机器是 VPS"
-    echo "  3) 手动配对：当前机器是家宽机"
+    echo "  2) 多节点手动配对：当前机器是 VPS（仅 WireGuard）"
+    echo "  3) 多节点手动配对：当前机器是家宽机（仅 WireGuard）"
     echo "  0) 返回主菜单    q) 退出"
     read -r -p "请选择 [0-3/q]：" choice
     case "$choice" in
@@ -192,7 +199,7 @@ deployment_menu() {
 }
 
 management_menu() {
-  local choice
+  local choice remove_node
   while true; do
     clear_screen
     print_header
@@ -201,13 +208,20 @@ management_menu() {
     echo "  2) 快速查看全部 SS 链接"
     echo "  3) 快速查看线路状态"
     echo "  4) 连接远程 VPS 管理"
+    echo "  5) 删除本机指定线路"
     echo "  0) 返回主菜单    q) 退出"
-    read -r -p "请选择 [0-4/q]：" choice
+    read -r -p "请选择 [0-5/q]：" choice
     case "$choice" in
       1) bash "$LIB_DIR/wg-home-manager.sh" menu ;;
       2) clear_screen; bash "$LIB_DIR/wg-home-manager.sh" links; pause_screen ;;
       3) clear_screen; bash "$LIB_DIR/wg-home-manager.sh" status; pause_screen ;;
       4) remote_manager; pause_screen ;;
+      5)
+        read -r -p "请输入要删除的节点 ID（留空取消）：" remove_node
+        [[ -n "$remove_node" ]] || continue
+        bash "$LIB_DIR/wg-home-remove.sh" --node "$remove_node"
+        pause_screen
+        ;;
       0) return ;;
       q|Q) clear_screen; exit 0 ;;
       *) echo "选择无效。"; pause_screen ;;
@@ -245,6 +259,7 @@ VolWG 命令：
   volwg manager            打开本机线路管理界面
   volwg manager links      查看本机保存的全部 SS 链接
   volwg key [参数]         双 SSH 窗口公钥向导
+  volwg remove --node ID   删除本机指定线路并归档配置
   volwg version            查看本地和在线版本
   volwg update             在线升级
   volwg help               显示此帮助
@@ -283,6 +298,7 @@ case "$subcommand" in
     exec bash "$LIB_DIR/wg-home-manager.sh" "$@"
     ;;
   key) shift; exec bash "$LIB_DIR/wg-home-key-wizard.sh" "$@" ;;
+  remove|delete) shift; exec bash "$LIB_DIR/wg-home-remove.sh" "$@" ;;
   deploy) shift; exec bash "$LIB_DIR/wg-home-deploy.sh" "$@" ;;
   version) show_version ;;
   update|upgrade) online_update ;;

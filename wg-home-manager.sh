@@ -2,6 +2,8 @@
 set -Eeuo pipefail
 
 STATE_DIR="${WG_HOME_STATE_DIR:-/etc/wg-home-exit/nodes}"
+MANUAL_STATE_DIR="${WG_HOME_MANUAL_STATE_DIR:-/etc/wg-home-exit/manual}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 die() {
   echo "错误：$*" >&2
@@ -24,13 +26,19 @@ pause_screen() {
 }
 
 manager_header() {
-  local title="$1"
-  local -a files
+  local title="$1" file id count=0
+  local -a files manual_files
   shopt -s nullglob
   files=("$STATE_DIR"/*.conf)
+  manual_files=("$MANUAL_STATE_DIR"/*.conf)
+  count="${#files[@]}"
+  for file in "${manual_files[@]}"; do
+    id="$(field "$file" NODE_ID)"
+    [[ -f "$STATE_DIR/$id.conf" ]] || ((count++)) || true
+  done
   echo "============================================================"
   echo " VolWG 线路管理 · $title"
-  echo " 已登记线路：${#files[@]} 条"
+  echo " 已登记线路：$count 条"
   echo "============================================================"
   echo
 }
@@ -44,6 +52,7 @@ usage() {
   volwg manager status           查看 WireGuard 握手状态
   volwg manager node ID [格式]   生成图形化 Xray 可导入节点
   volwg manager rename ID 名称   修改线路名称和 SS 链接备注
+  volwg manager delete ID        删除 VPS 端指定线路并归档配置
   volwg manager register         登记旧版本或手工创建的 SS 线路
   volwg manager                  打开交互式管理菜单
 
@@ -213,6 +222,18 @@ node_file() {
   printf '%s' "$STATE_DIR/$node_id.conf"
 }
 
+removable_file() {
+  local node_id="$1"
+  [[ "$node_id" =~ ^[a-z0-9][a-z0-9_]{0,7}$ ]] || die "节点 ID 无效"
+  if [[ -f "$STATE_DIR/$node_id.conf" ]]; then
+    printf '%s' "$STATE_DIR/$node_id.conf"
+  elif [[ -f "$MANUAL_STATE_DIR/$node_id.conf" ]]; then
+    printf '%s' "$MANUAL_STATE_DIR/$node_id.conf"
+  else
+    die "找不到节点：$node_id"
+  fi
+}
+
 SELECTED_NODE=""
 choose_node() {
   local file choice index=1 id name mode
@@ -241,6 +262,40 @@ choose_node() {
   ((choice == 0)) && return 1
   ((choice >= 1 && choice <= ${#files[@]})) || { echo "选择无效。"; pause_screen; return 1; }
   SELECTED_NODE="$(field "${files[choice-1]}" NODE_ID)"
+}
+
+choose_removable_node() {
+  local file choice index=1 id name role source
+  local -a files selected_files
+  SELECTED_NODE=""
+  shopt -s nullglob
+  files=("$STATE_DIR"/*.conf "$MANUAL_STATE_DIR"/*.conf)
+  clear_screen
+  manager_header "选择要删除的线路"
+  if ((${#files[@]} == 0)); then
+    echo "尚未登记可删除的线路。"
+    pause_screen
+    return 1
+  fi
+  for file in "${files[@]}"; do
+    id="$(field "$file" NODE_ID)"
+    if [[ "$file" == "$MANUAL_STATE_DIR"/* && -f "$STATE_DIR/$id.conf" ]]; then
+      continue
+    fi
+    name="$(decode "$(field "$file" DISPLAY_NAME_B64)")"
+    role="$(field "$file" ROLE)"
+    source="完整线路"
+    [[ "$file" == "$MANUAL_STATE_DIR"/* ]] && source="仅 WireGuard/${role:-未知端}"
+    printf '  %d) %-24.24s  [%s / %s]\n' "$index" "$name" "$id" "$source"
+    selected_files+=("$file")
+    ((index++))
+  done
+  echo "  0) 返回线路菜单"
+  read -r -p "请选择线路 [0-$((${#selected_files[@]}))]：" choice
+  [[ "$choice" =~ ^[0-9]+$ ]] || { echo "选择无效。"; pause_screen; return 1; }
+  ((choice == 0)) && return 1
+  ((choice >= 1 && choice <= ${#selected_files[@]})) || { echo "选择无效。"; pause_screen; return 1; }
+  SELECTED_NODE="$(field "${selected_files[choice-1]}" NODE_ID)"
 }
 
 node_status() {
@@ -289,6 +344,14 @@ list_nodes() {
     endpoint="$(field "$file" SS_ENDPOINT)"
     status="$(node_status "$iface")"
     printf '%-10s %-24.24s %-8s %-9s %-18s %-22s %s\n' "$id" "$name" "$mode" "$backend" "$iface" "$endpoint" "$status"
+  done
+  for file in "$MANUAL_STATE_DIR"/*.conf; do
+    id="$(field "$file" NODE_ID)"
+    [[ -f "$STATE_DIR/$id.conf" ]] && continue
+    found=1
+    name="$(decode "$(field "$file" DISPLAY_NAME_B64)")"
+    iface="$(field "$file" WG_INTERFACE)"
+    printf '%-10s %-24.24s %-8s %-9s %-18s %-22s %s\n' "$id" "$name" "manual" "WG-only" "$iface" "未配置 SS" "$(node_status "$iface")"
   done
   if ((found == 0)) && [[ -f /etc/wireguard/wg-home.conf ]]; then
     mode="direct"
@@ -445,6 +508,14 @@ show_status() {
     iface="$(field "$file" WG_INTERFACE)"
     printf '%-10s %-24.24s %s\n' "$id" "$name" "$(node_status "$iface")"
   done
+  for file in "$MANUAL_STATE_DIR"/*.conf; do
+    id="$(field "$file" NODE_ID)"
+    [[ -f "$STATE_DIR/$id.conf" ]] && continue
+    found=1
+    name="$(decode "$(field "$file" DISPLAY_NAME_B64)")"
+    iface="$(field "$file" WG_INTERFACE)"
+    printf '%-10s %-24.24s %s\n' "$id" "$name" "$(node_status "$iface")"
+  done
   if ((found == 0)) && [[ -f /etc/wireguard/wg-home.conf ]]; then
     printf '%-10s %-24.24s %s\n' "legacy" "旧版未登记线路" "$(node_status wg-home)"
   fi
@@ -466,6 +537,23 @@ rename_node() {
   echo "已更新线路名称：$new_name"
   [[ -n "$public_link" ]] && echo "公网 SS：$public_link"
   echo "私网 SS：$private_link"
+}
+
+delete_node() {
+  local file="$1" id name role
+  [[ "$(id -u)" == "0" ]] || die "删除线路需要 root，请使用 sudo"
+  [[ -x "$SCRIPT_DIR/wg-home-remove.sh" ]] || die "缺少 wg-home-remove.sh，请先运行 volwg update"
+  id="$(field "$file" NODE_ID)"
+  name="$(decode "$(field "$file" DISPLAY_NAME_B64)")"
+  role="$(field "$file" ROLE)"
+  role="${role:-vps}"
+  echo "即将删除本机 $role 端线路：$name ($id)"
+  if [[ "$role" == "vps" ]]; then
+    echo "删除后该线路及 SS 链接会从管理后台消失。"
+  fi
+  echo "配置文件将先归档，可恢复。"
+  echo
+  bash "$SCRIPT_DIR/wg-home-remove.sh" --node "$id" --role "$role"
 }
 
 register_node() {
@@ -574,9 +662,10 @@ menu() {
     echo "  4) 查看单条线路详细配置"
     echo "  5) 查看 WireGuard 握手状态"
     echo "  6) 修改线路/链接名称"
-    echo "  7) 登记旧版或手工线路"
+    echo "  7) 删除线路（停止服务并归档）"
+    echo "  8) 登记旧版或手工线路"
     echo "  0) 返回上级菜单    q) 退出"
-    read -r -p "请选择 [0-7/q]：" choice
+    read -r -p "请选择 [0-8/q]：" choice
     echo
     case "$choice" in
       1) clear_screen; manager_header "全部 SS 链接"; list_links; pause_screen ;;
@@ -616,7 +705,14 @@ menu() {
         rename_node "$(node_file "$SELECTED_NODE")" "$new_name"
         pause_screen
         ;;
-      7) clear_screen; manager_header "登记已有线路"; register_node; pause_screen ;;
+      7)
+        choose_removable_node || continue
+        clear_screen
+        manager_header "删除线路 · $SELECTED_NODE"
+        delete_node "$(removable_file "$SELECTED_NODE")"
+        pause_screen
+        ;;
+      8) clear_screen; manager_header "登记已有线路"; register_node; pause_screen ;;
       0) return ;;
       q|Q) clear_screen; exit 0 ;;
       *) echo "选择无效。"; pause_screen ;;
@@ -633,6 +729,7 @@ case "$command_name" in
   status) show_status ;;
   node|export) [[ -n "${2:-}" ]] || die "用法：volwg manager node ID [ss|xray|routing|all]"; export_node "$(node_file "$2")" "${3:-all}" ;;
   rename) [[ -n "${2:-}" && -n "${3:-}" ]] || die "用法：volwg manager rename ID 新名称"; rename_node "$(node_file "$2")" "$3" ;;
+  delete|remove) [[ -n "${2:-}" ]] || die "用法：volwg manager delete ID"; delete_node "$(removable_file "$2")" ;;
   register) register_node ;;
   menu) menu ;;
   -h|--help|help) usage ;;

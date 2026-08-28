@@ -26,6 +26,8 @@ DISPLAY_NAME="家宽线路 1"
 REPLACE_NODE="0"
 ASSUME_YES="0"
 GUIDED="0"
+AUTO_NODE_ID="0"
+AUTO_DISPLAY_NAME="0"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
@@ -51,10 +53,10 @@ usage() {
   --openwrt USER@HOST       --home 的兼容别名
   --openwrt-ssh-port PORT   --home-ssh-port 的兼容别名
   --identity PATH           SSH 私钥路径；省略则使用 ssh-agent/~/.ssh/config
-  --vps-wg-port PORT        VPS WireGuard 公网 UDP 端口，默认 51830
-  --home-wg-port PORT       家宽机 WireGuard 本地 UDP 端口，默认 51830
-  --vps-ss-port PORT        VPS 公网 SS 端口，默认 31000
-  --home-ss-port PORT       家宽机 SS2022 服务端口，默认 31000
+  --vps-wg-port PORT        VPS WireGuard 公网 UDP 起始端口，默认 51830
+  --home-wg-port PORT       家宽机 WireGuard 本地 UDP 起始端口，默认 51830
+  --vps-ss-port PORT        VPS 公网 SS 起始端口，默认 31000
+  --home-ss-port PORT       家宽机 SS2022 起始端口，默认 31000
   --public-ss on|off        是否开放公网 SS，默认 on
   --home-backend TYPE       家宽服务端：ss-rust（默认）或 xray
   --wg-port PORT            兼容选项：同时设置两端 WireGuard 端口
@@ -131,13 +133,23 @@ prompt_with_default() {
 }
 
 guided_full_deploy() {
-  local mode_choice backend_choice public_ss_choice identity_answer default_public_host
+  local mode_choice backend_choice public_ss_choice identity_answer default_public_host node_answer name_answer
 
   echo
   echo "[1/4] 线路基本信息"
   echo "------------------------------------------------------------"
-  NODE_ID="$(prompt_with_default "节点 ID（1-8 位小写字母/数字/_）" "$NODE_ID")"
-  DISPLAY_NAME="$(prompt_with_default "线路显示名称/SS 链接名称" "$DISPLAY_NAME")"
+  read -r -p "节点 ID（留空自动选择未使用 ID） [$NODE_ID]：" node_answer
+  if [[ -z "$node_answer" ]]; then
+    AUTO_NODE_ID="1"
+  else
+    NODE_ID="$node_answer"
+  fi
+  read -r -p "线路显示名称/SS 链接名称（留空自动生成） [$DISPLAY_NAME]：" name_answer
+  if [[ -z "$name_answer" ]]; then
+    AUTO_DISPLAY_NAME="1"
+  else
+    DISPLAY_NAME="$name_answer"
+  fi
   echo
   echo "部署结构："
   echo "  1) relay：推荐公网 SS 入口（同时生成私网入口）"
@@ -201,8 +213,8 @@ if (($# == 0)); then
   echo "============================================================"
   echo "  1) 全自动部署新线路（推荐）"
   echo "  2) 管理已部署线路"
-  echo "  3) 手动配对：当前机器是 VPS"
-  echo "  4) 手动配对：当前机器是家宽机"
+  echo "  3) 多节点手动配对：当前机器是 VPS（仅 WireGuard）"
+  echo "  4) 多节点手动配对：当前机器是家宽机（仅 WireGuard）"
   echo "  5) 查看帮助"
   echo "  0) 退出"
   read -r -p "请选择 [0-5]：" entry_choice
@@ -274,6 +286,9 @@ done
 if [[ "$GUIDED" == "1" ]]; then
   guided_full_deploy
 fi
+if [[ "$AUTO_DISPLAY_NAME" == "1" ]]; then
+  DISPLAY_NAME="家宽线路 $NODE_ID"
+fi
 
 [[ "$MODE" == "relay" || "$MODE" == "direct" ]] || die "--mode 必须是 relay 或 direct"
 [[ "$HOME_BACKEND" == "ss-rust" || "$HOME_BACKEND" == "xray" ]] || die "--home-backend 必须是 ss-rust 或 xray"
@@ -322,6 +337,7 @@ if [[ -n "$IDENTITY" ]]; then
 fi
 [[ -f "$SCRIPT_DIR/wg-home-manager.sh" ]] || die "缺少 wg-home-manager.sh；请使用仓库完整版或一键安装命令"
 [[ -f "$SCRIPT_DIR/wg-home-key-wizard.sh" ]] || die "缺少 wg-home-key-wizard.sh；请使用仓库完整版或一键安装命令"
+[[ -f "$SCRIPT_DIR/wg-home-remove.sh" ]] || die "缺少 wg-home-remove.sh；请使用仓库完整版或一键安装命令"
 [[ -f "$SCRIPT_DIR/volwg" ]] || die "缺少 volwg 快捷入口；请使用仓库完整版或一键安装命令"
 [[ -f "$SCRIPT_DIR/VERSION" ]] || die "缺少 VERSION；请使用仓库完整版或一键安装命令"
 
@@ -344,6 +360,46 @@ ssh_openwrt() {
   ssh "${SSH_COMMON[@]}" -p "$OPENWRT_SSH_PORT" "$OPENWRT_TARGET" "$@"
 }
 
+find_remote_free_node_id() {
+  # shellcheck disable=SC2016
+  ssh_vps 'set -eu; number=1; while test "$number" -le 99; do candidate="home$number"; iface="wgh_$candidate"; if test ! -e "/etc/wireguard/$iface.conf" && test ! -e "/etc/wg-home-exit/nodes/$candidate.conf" && ! ip link show "$iface" >/dev/null 2>&1; then printf "%s" "$candidate"; exit 0; fi; number=$((number + 1)); done; exit 1'
+}
+
+find_remote_free_port() {
+  local ssh_function="$1" start_port="$2" primary_field="$3" legacy_field="$4"
+  # 变量必须在远程机器展开；本地只注入已验证的数字、字段名和节点 ID。
+  # shellcheck disable=SC2016
+  "$ssh_function" "set -eu
+port='$start_port'
+port_used() {
+  candidate=\"\$1\"
+  hex=\$(printf '%04X' \"\$candidate\")
+  for table in /proc/net/udp /proc/net/udp6 /proc/net/tcp /proc/net/tcp6; do
+    test -r \"\$table\" || continue
+    grep -Eqi \"[[:space:]][0-9A-F]+:\$hex[[:space:]]\" \"\$table\" && return 0
+  done
+  for file in /etc/wg-home-exit/nodes/*.conf; do
+    test -f \"\$file\" || continue
+    file_node=\$(sed -n 's/^NODE_ID=//p' \"\$file\" | head -n 1)
+    test \"\$file_node\" = '$NODE_ID' && continue
+    value=\$(sed -n 's/^$primary_field=//p' \"\$file\" | head -n 1)
+    test -n \"\$value\" || value=\$(sed -n 's/^$legacy_field=//p' \"\$file\" | head -n 1)
+    test \"\$value\" = \"\$candidate\" && return 0
+  done
+  return 1
+}
+while port_used \"\$port\"; do
+  port=\$((port + 1))
+  test \"\$port\" -le 65535 || exit 2
+done
+printf '%s' \"\$port\""
+}
+
+detect_remote_public_ipv4() {
+  # shellcheck disable=SC2016
+  ssh_vps 'address=""; if command -v curl >/dev/null 2>&1; then address=$(curl -4fsS --max-time 5 https://api.ipify.org 2>/dev/null || true); elif command -v wget >/dev/null 2>&1; then address=$(wget -4qO- -T 5 https://api.ipify.org 2>/dev/null || true); fi; case "$address" in *.*.*.*) printf "%s" "$address" ;; *) ip -4 route get 1.1.1.1 2>/dev/null | sed -n "s/.* src \([0-9.]*\).*/\1/p" | head -n 1 ;; esac'
+}
+
 scp_vps() {
   scp "${SSH_COMMON[@]}" -P "$VPS_SSH_PORT" "$1" "$VPS_TARGET:$2"
 }
@@ -351,6 +407,43 @@ scp_vps() {
 scp_openwrt() {
   scp -O "${SSH_COMMON[@]}" -P "$OPENWRT_SSH_PORT" "$1" "$OPENWRT_TARGET:$2"
 }
+
+if [[ "$AUTO_NODE_ID" == "1" && "$REPLACE_NODE" != "1" ]]; then
+  original_node="$NODE_ID"
+  NODE_ID="$(find_remote_free_node_id)"
+  if [[ "$AUTO_DISPLAY_NAME" == "1" ]]; then
+    DISPLAY_NAME="家宽线路 $NODE_ID"
+  fi
+  WG_IFACE="wgh_$NODE_ID"
+  XRAY_SERVICE="xray-wgh-$NODE_ID"
+  SS_RUST_SERVICE="ssrust-wgh-$NODE_ID"
+  if [[ "$HOME_BACKEND" == "ss-rust" ]]; then
+    HOME_SERVICE="$SS_RUST_SERVICE"
+  else
+    HOME_SERVICE="$XRAY_SERVICE"
+  fi
+  NFT_SERVICE="wgh-nft-$NODE_ID"
+  [[ "$NODE_ID" == "$original_node" ]] || echo "节点 ID $original_node 已使用或自动避让，改用 $NODE_ID。"
+fi
+
+if [[ "$REPLACE_NODE" != "1" ]]; then
+  original_port="$VPS_WG_PORT"
+  VPS_WG_PORT="$(find_remote_free_port ssh_vps "$VPS_WG_PORT" VPS_WG_PORT WG_PORT)"
+  [[ "$VPS_WG_PORT" == "$original_port" ]] || echo "VPS WireGuard UDP $original_port 已占用，自动改用 $VPS_WG_PORT。"
+
+  original_port="$HOME_WG_PORT"
+  HOME_WG_PORT="$(find_remote_free_port ssh_openwrt "$HOME_WG_PORT" HOME_WG_PORT WG_PORT)"
+  [[ "$HOME_WG_PORT" == "$original_port" ]] || echo "家宽 WireGuard UDP $original_port 已占用，自动改用 $HOME_WG_PORT。"
+
+  original_port="$VPS_SS_PORT"
+  VPS_SS_PORT="$(find_remote_free_port ssh_vps "$VPS_SS_PORT" VPS_SS_PORT SS_PORT)"
+  [[ "$VPS_SS_PORT" == "$original_port" ]] || echo "VPS SS TCP/UDP $original_port 已占用，自动改用 $VPS_SS_PORT。"
+
+  original_port="$HOME_SS_PORT"
+  HOME_SS_PORT="$(find_remote_free_port ssh_openwrt "$HOME_SS_PORT" HOME_SS_PORT SS_PORT)"
+  [[ "$HOME_SS_PORT" == "$original_port" ]] || echo "家宽 SS TCP/UDP $original_port 已占用，自动改用 $HOME_SS_PORT。"
+fi
+vps_detected_ipv4="$(detect_remote_public_ipv4 2>/dev/null || true)"
 
 wait_for_openwrt() {
   local _
@@ -397,6 +490,10 @@ echo "节点 ID：$NODE_ID"
 echo "线路名称：$DISPLAY_NAME"
 echo "部署模式：$MODE"
 echo "公网/优化 VPS：${VPS_TARGET}（SSH ${VPS_SSH_PORT}）"
+echo "VPS 公网地址（配置）：$VPS_PUBLIC_HOST"
+if [[ -n "$vps_detected_ipv4" ]]; then
+  echo "VPS 检测到的 IPv4：$vps_detected_ipv4"
+fi
 echo "家宽机：${OPENWRT_TARGET}（SSH ${OPENWRT_SSH_PORT}）"
 echo "家宽服务端：$HOME_BACKEND"
 echo "WireGuard：${WG_IFACE}，${WG_PREFIX}.1 ↔ ${WG_PREFIX}.2"
@@ -1032,10 +1129,24 @@ chmod 600 "$TMP_DIR/node.conf"
 scp_vps "$SCRIPT_DIR/wg-home-manager.sh" /tmp/wg-home-manager
 scp_vps "$SCRIPT_DIR/wg-home-deploy.sh" /tmp/volwg-deploy
 scp_vps "$SCRIPT_DIR/wg-home-key-wizard.sh" /tmp/volwg-key-wizard
+scp_vps "$SCRIPT_DIR/wg-home-remove.sh" /tmp/volwg-remove
 scp_vps "$SCRIPT_DIR/volwg" /tmp/volwg-launcher
 scp_vps "$SCRIPT_DIR/VERSION" /tmp/volwg-version
 scp_vps "$TMP_DIR/node.conf" "/tmp/$NODE_ID.conf"
-ssh_vps "set -eu; install -d -m 755 /usr/local/lib/volwg /usr/local/bin; install -m 700 /tmp/volwg-deploy /usr/local/lib/volwg/wg-home-deploy.sh; install -m 700 /tmp/volwg-key-wizard /usr/local/lib/volwg/wg-home-key-wizard.sh; install -m 700 /tmp/wg-home-manager /usr/local/lib/volwg/wg-home-manager.sh; install -m 644 /tmp/volwg-version /usr/local/lib/volwg/VERSION; install -m 755 /tmp/volwg-launcher /usr/local/bin/volwg; install -m 755 /tmp/wg-home-manager /usr/local/sbin/wg-home-manager; install -d -m 700 /etc/wg-home-exit/nodes; install -m 600 '/tmp/$NODE_ID.conf' '/etc/wg-home-exit/nodes/$NODE_ID.conf'; rm -f /tmp/wg-home-manager /tmp/volwg-deploy /tmp/volwg-key-wizard /tmp/volwg-launcher /tmp/volwg-version '/tmp/$NODE_ID.conf'"
+ssh_vps "set -eu; install -d -m 755 /usr/local/lib/volwg /usr/local/bin; install -m 700 /tmp/volwg-deploy /usr/local/lib/volwg/wg-home-deploy.sh; install -m 700 /tmp/volwg-key-wizard /usr/local/lib/volwg/wg-home-key-wizard.sh; install -m 700 /tmp/volwg-remove /usr/local/lib/volwg/wg-home-remove.sh; install -m 700 /tmp/wg-home-manager /usr/local/lib/volwg/wg-home-manager.sh; install -m 644 /tmp/volwg-version /usr/local/lib/volwg/VERSION; install -m 755 /tmp/volwg-launcher /usr/local/bin/volwg; install -m 755 /tmp/wg-home-manager /usr/local/sbin/wg-home-manager; install -d -m 700 /etc/wg-home-exit/nodes; install -m 600 '/tmp/$NODE_ID.conf' '/etc/wg-home-exit/nodes/$NODE_ID.conf'; rm -f /tmp/wg-home-manager /tmp/volwg-deploy /tmp/volwg-key-wizard /tmp/volwg-remove /tmp/volwg-launcher /tmp/volwg-version '/tmp/$NODE_ID.conf'"
+
+# 同步删除工具到家宽端，确保两端都能用同一个 volwg remove 命令清理本机线路。
+scp_openwrt "$SCRIPT_DIR/wg-home-manager.sh" /tmp/wg-home-manager
+scp_openwrt "$SCRIPT_DIR/wg-home-deploy.sh" /tmp/volwg-deploy
+scp_openwrt "$SCRIPT_DIR/wg-home-key-wizard.sh" /tmp/volwg-key-wizard
+scp_openwrt "$SCRIPT_DIR/wg-home-remove.sh" /tmp/volwg-remove
+scp_openwrt "$SCRIPT_DIR/volwg" /tmp/volwg-launcher
+scp_openwrt "$SCRIPT_DIR/VERSION" /tmp/volwg-version
+if [[ "$home_kind" == "openwrt" ]]; then
+  ssh_openwrt "set -eu; mkdir -p /usr/lib/volwg /usr/bin; cp /tmp/volwg-deploy /usr/lib/volwg/wg-home-deploy.sh; cp /tmp/volwg-key-wizard /usr/lib/volwg/wg-home-key-wizard.sh; cp /tmp/volwg-remove /usr/lib/volwg/wg-home-remove.sh; cp /tmp/wg-home-manager /usr/lib/volwg/wg-home-manager.sh; cp /tmp/volwg-version /usr/lib/volwg/VERSION; cp /tmp/volwg-launcher /usr/bin/volwg; chmod 700 /usr/lib/volwg/wg-home-deploy.sh /usr/lib/volwg/wg-home-key-wizard.sh /usr/lib/volwg/wg-home-remove.sh /usr/lib/volwg/wg-home-manager.sh; chmod 644 /usr/lib/volwg/VERSION; chmod 755 /usr/bin/volwg; rm -f /tmp/wg-home-manager /tmp/volwg-deploy /tmp/volwg-key-wizard /tmp/volwg-remove /tmp/volwg-launcher /tmp/volwg-version"
+else
+  ssh_openwrt "set -eu; install -d -m 755 /usr/local/lib/volwg /usr/local/bin; install -m 700 /tmp/volwg-deploy /usr/local/lib/volwg/wg-home-deploy.sh; install -m 700 /tmp/volwg-key-wizard /usr/local/lib/volwg/wg-home-key-wizard.sh; install -m 700 /tmp/volwg-remove /usr/local/lib/volwg/wg-home-remove.sh; install -m 700 /tmp/wg-home-manager /usr/local/lib/volwg/wg-home-manager.sh; install -m 644 /tmp/volwg-version /usr/local/lib/volwg/VERSION; install -m 755 /tmp/volwg-launcher /usr/local/bin/volwg; rm -f /tmp/wg-home-manager /tmp/volwg-deploy /tmp/volwg-key-wizard /tmp/volwg-remove /tmp/volwg-launcher /tmp/volwg-version"
+fi
 
 echo
 echo "线路名称：$DISPLAY_NAME"
@@ -1089,6 +1200,8 @@ echo "  volwg manager list"
 echo "  volwg manager links"
 echo "  volwg manager show $NODE_ID"
 echo "  volwg manager node $NODE_ID"
+echo "删除该线路时，请分别在 VPS 和对应家宽机执行："
+echo "  volwg remove --node $NODE_ID"
 if [[ "$PUBLIC_SS_ENABLED" == "1" ]]; then
   echo
   echo "注意：确认 VPS 防火墙允许 $VPS_WG_PORT/UDP 和 $VPS_SS_PORT/TCP+UDP。"

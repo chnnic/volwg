@@ -29,6 +29,8 @@
 
 常用的线路管理排在首位。菜单支持输入 `0` 返回上级，也可以输入 `q` 直接退出；本机存在已登记线路时，页头会显示线路数量。
 
+新建多节点时，留空节点 ID 会自动选择 `home1`、`home2` 等未使用 ID。VPS/家宽两端的 WireGuard 和 SS 起始端口如果已被占用，脚本会自动向后寻找可用端口，并在确认页面显示最终采用的端口。
+
 查看版本或在线升级：
 
     volwg version
@@ -180,6 +182,7 @@ Debian LXC 可以作为家宽端或中转端使用，但容器必须拥有 `NET_
     sudo volwg manager status
     sudo volwg manager rename line1 "备用家宽线路"
     sudo volwg manager node line1
+    sudo volwg manager delete line1
 
 `links` 会按自定义线路名称分别显示公网和 WireGuard 私网 SS 链接。私网链接仅供已连接对应隧道的 VPS/Xray 使用。
 
@@ -205,7 +208,7 @@ Debian LXC 可以作为家宽端或中转端使用，但容器必须拥有 `NET_
 
 ## 双 SSH 窗口交换公钥
 
-将仓库放到两台机器后，同时打开两个 SSH 窗口。
+将仓库放到两台机器后，同时打开两个 SSH 窗口。手动配对现在支持多个节点，每条线路使用独立的 `wgh_节点ID` 接口、密钥和配置，不再共用或覆盖固定的 `wg-home`。
 
 窗口 A，公网或优化 VPS：
 
@@ -227,20 +230,24 @@ Debian LXC 可以作为家宽端或中转端使用，但容器必须拥有 `NET_
 
 两边都会：
 
-1. 自动安装 WireGuard。
-2. 生成本机 WireGuard 密钥。
-3. 显示本机公钥。
-4. 等待粘贴另一个窗口显示的公钥。
-5. 写入配置并设置开机启动。
+1. 询问节点 ID 和自定义线路名称；两个窗口填写相同内容。
+2. 自动安装 WireGuard。
+3. 为该节点生成独立 WireGuard 密钥。
+4. VPS 窗口检测并显示公网 IP/endpoint。
+5. 显示本机公钥，等待粘贴另一个窗口的公钥。
+6. 自动避让本机已占用的监听端口。
+7. 写入独立配置并设置开机启动；节点已存在时默认拒绝覆盖。
 
-只交换公钥。私钥始终保存在各自机器：
+只交换公钥。以节点 `line1` 为例，私钥始终保存在各自机器：
 
-    /etc/wireguard/wg-home.key
+    /etc/wireguard/wgh_line1.key
 
 也可以直接运行：
 
     sudo ./volwg key --role vps
     sudo ./volwg key --role home
+
+手动配对只配置 WireGuard。如果还需要自动安装 ss-rust/Xray、生成公网与私网 SS 链接，请选择“全自动部署新线路”。
 
 OpenWrt 首次安装 WireGuard 后，向导会提示运行：
 
@@ -299,6 +306,8 @@ SSH 可能短暂断开，重新连接后使用以下命令检查：
 
 可通过 `--vps-wg-port`、`--home-wg-port`、`--vps-ss-port`、`--home-ss-port` 分别指定两端端口。兼容参数 `--wg-port` 和 `--ss-port` 会把两端设置成同一个值。`--public-ss on|off` 控制是否创建公网 DNAT/SNAT，默认 `on`。脚本会检查已登记节点的 VPS 监听端口和网段冲突；同一节点 ID 默认禁止覆盖，确认需要更新时使用 `--replace`。
 
+这些端口参数现在表示“起始端口”：创建新节点时如发现端口被现有监听程序或其他 VolWG 节点占用，会依次尝试后续端口，直到找到可用值。最终端口会在写入配置前显示。使用 `--replace` 更新同一节点时不会自动改变原端口。
+
 公网 SS 允许两端使用不同端口，例如公网访问 VPS `31000`，再 DNAT 到家宽机 WireGuard 地址的 `32000`。家宽端主动连接 VPS，因此家宽 WireGuard 本地端口也可以按 NAT 或服务商允许的端口范围单独指定。
 
 ## Xray 路由
@@ -322,6 +331,26 @@ SSH 可能短暂断开，重新连接后使用以下命令检查：
 
 SS2022、SSH 私钥和 WireGuard 私钥均属于敏感信息，不要公开。
 
+## 删除线路
+
+在 VPS 的线路管理菜单中选择“删除线路”，或直接执行：
+
+    sudo volwg manager delete line1
+
+这会停止并删除 VPS 端该节点的 WireGuard、nftables 转发和管理链接记录。然后在对应家宽机执行：
+
+    sudo volwg remove --node line1 --role home
+
+也可以在任意一端直接使用 `volwg remove --node line1`，由脚本自动判断当前角色。删除时必须再次输入完整节点 ID；所有文件先移动到以下归档目录，不会永久擦除：
+
+    /etc/wg-home-exit/removed/时间-节点ID-角色/
+
+删除只作用于选中的节点，不会停止或修改其他线路。VPS 无法自动登录家宽机，因此完整删除需要在两端各执行一次。
+
+早期手动配对固定使用 `wg-home.conf`。如果曾被第二次配对覆盖，可以先检查自动备份：
+
+    ls -1t /etc/wireguard/wg-home.conf.before.*
+
 ## 文件
 
 - VERSION：当前语义化版本号。
@@ -330,6 +359,7 @@ SS2022、SSH 私钥和 WireGuard 私钥均属于敏感信息，不要公开。
 - wg-home-deploy.sh：完整部署脚本和引导式入口。
 - wg-home-key-wizard.sh：双 SSH 窗口 WireGuard 公钥交换向导。
 - wg-home-manager.sh：安装到 VPS 的多线路查看和 SS 链接管理后台。
+- wg-home-remove.sh：按节点停止服务并归档删除 VPS/家宽端配置。
 
 ## 注意
 
