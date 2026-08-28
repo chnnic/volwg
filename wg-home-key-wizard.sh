@@ -89,6 +89,37 @@ prompt_required() {
   printf '%s' "$answer"
 }
 
+valid_node_id() {
+  [[ "$1" =~ ^[a-z0-9][a-z0-9_]{0,7}$ ]]
+}
+
+normalize_node_id() {
+  printf '%s' "$1" \
+    | tr '[:upper:]' '[:lower:]' \
+    | tr '-' '_' \
+    | sed 's/^[^a-z0-9]*//; s/[^a-z0-9_]//g' \
+    | cut -c 1-8
+}
+
+prompt_node_id() {
+  local default_value="$1" answer suggestion
+  while true; do
+    read -r -p "内部节点 ID（仅小写字母、数字、下划线；显示名称下一步填写） [$default_value]：" answer
+    answer="${answer:-$default_value}"
+    if valid_node_id "$answer"; then
+      NODE_ID="$answer"
+      return 0
+    fi
+    echo "输入无效：内部节点 ID 必须是 1-8 位小写字母、数字或下划线。" >&2
+    suggestion="$(normalize_node_id "$answer")"
+    if valid_node_id "$suggestion"; then
+      echo "建议节点 ID：${suggestion}（直接按 Enter 采用）" >&2
+      default_value="$suggestion"
+    fi
+    echo "请重新输入；线路显示名称稍后仍可使用大写字母和连字符。" >&2
+  done
+}
+
 valid_wg_key() {
   [[ "$1" =~ ^[A-Za-z0-9+/]{43}=$ ]]
 }
@@ -208,7 +239,9 @@ next_node_id() {
   for number in {1..99}; do
     candidate="home$number"
     iface="wgh_$candidate"
-    if [[ ! -e "/etc/wireguard/$iface.conf" && ! -e "/etc/wg-home-exit/manual/$candidate.conf" ]] && \
+    if [[ ! -e "/etc/wireguard/$iface.conf" \
+          && ! -e "/etc/wg-home-exit/nodes/$candidate.conf" \
+          && ! -e "/etc/wg-home-exit/manual/$candidate.conf" ]] && \
        ! ip link show "$iface" >/dev/null 2>&1 && \
        ! { command -v uci >/dev/null 2>&1 && uci -q get "network.$iface" >/dev/null 2>&1; }; then
       printf '%s' "$candidate"
@@ -257,6 +290,44 @@ next_free_port() {
     ((port <= 65535)) || die "从指定起始值开始没有可用端口"
   done
   printf '%s' "$port"
+}
+
+select_available_local_ports() {
+  local selected_port
+  [[ "$REPLACE_NODE" != "1" ]] || return 0
+  if [[ "$ROLE" == "vps" ]]; then
+    selected_port="$(next_free_port "$VPS_WG_PORT")"
+    if [[ "$selected_port" != "$VPS_WG_PORT" ]]; then
+      echo "VPS WireGuard UDP $VPS_WG_PORT 已占用，输入默认值改为 ${selected_port}。"
+      VPS_WG_PORT="$selected_port"
+    fi
+    if [[ "$FULL_STACK" == "1" && "$PUBLIC_SS_ENABLED" == "1" ]]; then
+      selected_port="$(next_free_port "$VPS_SS_PORT")"
+      if [[ "$selected_port" == "$VPS_WG_PORT" ]]; then
+        selected_port="$(next_free_port "$((VPS_WG_PORT + 1))")"
+      fi
+      if [[ "$selected_port" != "$VPS_SS_PORT" ]]; then
+        echo "VPS 公网 SS TCP/UDP $VPS_SS_PORT 已占用，输入默认值改为 ${selected_port}。"
+        VPS_SS_PORT="$selected_port"
+      fi
+    fi
+  else
+    selected_port="$(next_free_port "$HOME_WG_PORT")"
+    if [[ "$selected_port" != "$HOME_WG_PORT" ]]; then
+      echo "家宽 WireGuard UDP $HOME_WG_PORT 已占用，输入默认值改为 ${selected_port}。"
+      HOME_WG_PORT="$selected_port"
+    fi
+    if [[ "$FULL_STACK" == "1" ]]; then
+      selected_port="$(next_free_port "$HOME_SS_PORT")"
+      if [[ "$selected_port" == "$HOME_WG_PORT" ]]; then
+        selected_port="$(next_free_port "$((HOME_WG_PORT + 1))")"
+      fi
+      if [[ "$selected_port" != "$HOME_SS_PORT" ]]; then
+        echo "家宽 SS2022 TCP/UDP $HOME_SS_PORT 已占用，输入默认值改为 ${selected_port}。"
+        HOME_SS_PORT="$selected_port"
+      fi
+    fi
+  fi
 }
 
 detect_public_ipv4() {
@@ -796,8 +867,11 @@ if [[ "$FULL_STACK" == "1" && "$ROLE" == "home" ]]; then
 fi
 
 default_node="$(next_node_id)"
-[[ -n "$NODE_ID" ]] || NODE_ID="$(prompt_default "节点 ID（两个窗口填写相同 ID）" "$default_node")"
-[[ "$NODE_ID" =~ ^[a-z0-9][a-z0-9_]{0,7}$ ]] || die "节点 ID 必须是 1-8 位小写字母、数字或下划线"
+if [[ -z "$NODE_ID" ]]; then
+  prompt_node_id "$default_node"
+else
+  valid_node_id "$NODE_ID" || die "节点 ID 必须是 1-8 位小写字母、数字或下划线"
+fi
 [[ -n "$DISPLAY_NAME" ]] || DISPLAY_NAME="$(prompt_default "线路显示名称（两个窗口建议相同）" "家宽线路 $NODE_ID")"
 [[ -n "$DISPLAY_NAME" ]] || die "线路名称不能为空"
 
@@ -892,6 +966,12 @@ if [[ "$ROLE" == "vps" ]]; then
   fi
 fi
 
+# 在显示端口输入框之前先扫描一次，让默认值直接呈现可用端口。
+# 参数输入后还会再次扫描，以处理用户手动填写了已占用端口的情况。
+if [[ "$PAIR_CODE_LOADED" != "1" ]]; then
+  select_available_local_ports
+fi
+
 if [[ "$FULL_STACK" == "1" ]]; then
   echo
   echo "[3/7] 双窗口共享参数"
@@ -953,39 +1033,7 @@ if [[ "$FULL_STACK" == "1" ]]; then
   valid_port "$HOME_SS_PORT" || die "家宽机 SS 端口无效"
 fi
 
-if [[ "$ROLE" == "vps" && "$REPLACE_NODE" != "1" ]]; then
-  selected_port="$(next_free_port "$VPS_WG_PORT")"
-  if [[ "$selected_port" != "$VPS_WG_PORT" ]]; then
-    echo "VPS UDP $VPS_WG_PORT 已占用，自动改用 $selected_port。请在家宽窗口填写 $selected_port。"
-    VPS_WG_PORT="$selected_port"
-  fi
-  if [[ "$FULL_STACK" == "1" && "$PUBLIC_SS_ENABLED" == "1" ]]; then
-    selected_port="$(next_free_port "$VPS_SS_PORT")"
-    if [[ "$selected_port" == "$VPS_WG_PORT" ]]; then
-      selected_port="$(next_free_port "$((VPS_WG_PORT + 1))")"
-    fi
-    if [[ "$selected_port" != "$VPS_SS_PORT" ]]; then
-      echo "VPS SS 端口 $VPS_SS_PORT 已占用，自动改用 $selected_port。请在家宽窗口填写 $selected_port。"
-      VPS_SS_PORT="$selected_port"
-    fi
-  fi
-elif [[ "$ROLE" == "home" && "$REPLACE_NODE" != "1" ]]; then
-  selected_port="$(next_free_port "$HOME_WG_PORT")"
-  if [[ "$selected_port" != "$HOME_WG_PORT" ]]; then
-    echo "家宽本地 UDP $HOME_WG_PORT 已占用，自动改用 $selected_port。"
-    HOME_WG_PORT="$selected_port"
-  fi
-  if [[ "$FULL_STACK" == "1" ]]; then
-    selected_port="$(next_free_port "$HOME_SS_PORT")"
-    if [[ "$selected_port" == "$HOME_WG_PORT" ]]; then
-      selected_port="$(next_free_port "$((HOME_WG_PORT + 1))")"
-    fi
-    if [[ "$selected_port" != "$HOME_SS_PORT" ]]; then
-      echo "家宽 SS 端口 $HOME_SS_PORT 已占用，自动改用 $selected_port。请在 VPS 窗口使用同一最终端口。"
-      HOME_SS_PORT="$selected_port"
-    fi
-  fi
-fi
+select_available_local_ports
 
 if [[ "$FULL_STACK" == "1" && "$ROLE" == "vps" && -z "$SS_PASSWORD" ]]; then
   SS_PASSWORD="$(dd if=/dev/urandom bs=16 count=1 2>/dev/null | base64 | tr -d '\r\n')"
