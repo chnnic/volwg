@@ -38,6 +38,7 @@ grep -Fq '自动向后寻找可用端口' < <(bash "$ROOT_DIR/wg-home-key-wizard
 grep -Fq 'volwg remove --node' < <(bash "$ROOT_DIR/wg-home-remove.sh" --help)
 grep -Fq 'wg-home-remove.sh' "$ROOT_DIR/install.sh"
 grep -Fq 'wg-home-purge.sh' "$ROOT_DIR/install.sh"
+grep -Fq 'atomic_install "$TMP_DIR/volwg" "$INSTALL_BIN_DIR/volwg" 755' "$ROOT_DIR/install.sh"
 grep -Fq '不处理 wg-id' < <(bash "$ROOT_DIR/wg-home-purge.sh" --help)
 grep -Fq 'volwg purge' "$ROOT_DIR/volwg"
 grep -Fq '双 SSH 窗口完整部署（推荐）' "$ROOT_DIR/volwg"
@@ -64,8 +65,8 @@ grep -Fq '家宽机 SSH 私钥路径' "$ROOT_DIR/wg-home-deploy.sh"
 grep -Fq '输入序号或节点 ID' "$ROOT_DIR/wg-home-manager.sh"
 grep -Fq 'delete-menu|remove-menu' "$ROOT_DIR/wg-home-manager.sh"
 grep -Fq '按序号删除本机线路' "$ROOT_DIR/volwg"
-grep -Fq 'BUILTIN_VERSION="1.4.9"' "$ROOT_DIR/volwg"
-grep -Fxq '1.4.9' "$ROOT_DIR/VERSION"
+grep -Fq 'BUILTIN_VERSION="1.4.10"' "$ROOT_DIR/volwg"
+grep -Fxq '1.4.10' "$ROOT_DIR/VERSION"
 
 menu_output="$(printf '2\n2\n0\n0\n0\n' | "$ROOT_DIR/volwg")"
 grep -Fq '此模式只会' <<<"$menu_output"

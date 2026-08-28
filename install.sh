@@ -23,6 +23,20 @@ download() {
   fi
 }
 
+# 安装器可能由正在运行的 volwg 自身调用。不能直接 cp 覆盖入口脚本，
+# 否则 Bash 继续读取被截断/重写的文件时可能从错误偏移处解析后续内容。
+atomic_install() {
+  local source="$1" destination="$2" mode="$3" temporary
+  temporary="$(mktemp "${destination}.tmp.XXXXXX")"
+  if cp -- "$source" "$temporary" \
+    && chmod "$mode" "$temporary" \
+    && mv -f -- "$temporary" "$destination"; then
+    return 0
+  fi
+  rm -f -- "$temporary"
+  return 1
+}
+
 echo "正在下载 VolWG 部署向导..."
 download "$REPO_RAW_URL/wg-home-deploy.sh" "$TMP_DIR/wg-home-deploy.sh"
 download "$REPO_RAW_URL/wg-home-key-wizard.sh" "$TMP_DIR/wg-home-key-wizard.sh"
@@ -54,12 +68,12 @@ else
 fi
 
 mkdir -p "$INSTALL_LIB_DIR" "$INSTALL_BIN_DIR"
-cp "$TMP_DIR/wg-home-deploy.sh" "$TMP_DIR/wg-home-key-wizard.sh" "$TMP_DIR/wg-home-manager.sh" "$TMP_DIR/wg-home-remove.sh" "$TMP_DIR/wg-home-purge.sh" "$INSTALL_LIB_DIR/"
-cp "$TMP_DIR/VERSION" "$INSTALL_LIB_DIR/VERSION"
-cp "$TMP_DIR/volwg" "$INSTALL_BIN_DIR/volwg"
-chmod 700 "$INSTALL_LIB_DIR/wg-home-deploy.sh" "$INSTALL_LIB_DIR/wg-home-key-wizard.sh" "$INSTALL_LIB_DIR/wg-home-manager.sh" "$INSTALL_LIB_DIR/wg-home-remove.sh" "$INSTALL_LIB_DIR/wg-home-purge.sh"
-chmod 644 "$INSTALL_LIB_DIR/VERSION"
-chmod 755 "$INSTALL_BIN_DIR/volwg"
+for component in wg-home-deploy.sh wg-home-key-wizard.sh wg-home-manager.sh wg-home-remove.sh wg-home-purge.sh; do
+  atomic_install "$TMP_DIR/$component" "$INSTALL_LIB_DIR/$component" 700
+done
+atomic_install "$TMP_DIR/VERSION" "$INSTALL_LIB_DIR/VERSION" 644
+# 最后原子替换入口，让新入口出现时依赖文件已经全部就绪。
+atomic_install "$TMP_DIR/volwg" "$INSTALL_BIN_DIR/volwg" 755
 
 echo "VolWG 已安装：$INSTALL_BIN_DIR/volwg"
 if [[ ":$PATH:" != *":$INSTALL_BIN_DIR:"* ]]; then

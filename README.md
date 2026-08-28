@@ -36,7 +36,7 @@
     volwg version
     volwg update
 
-版本号显示在主界面顶部。在线升级只替换 VolWG 程序文件，不会删除 `/etc/wg-home-exit/nodes` 中的线路记录。
+版本号显示在主界面顶部。在线升级会原子替换 VolWG 程序文件，避免覆盖正在运行的入口脚本；升级不会删除 `/etc/wg-home-exit/nodes` 中的线路记录。
 
 root 用户安装到 `/usr/local/bin/volwg`；OpenWrt root 安装到 `/usr/bin/volwg`；普通用户安装到 `~/.local/bin/volwg`，安装器会配置新终端所需的 PATH。
 
