@@ -1000,7 +1000,7 @@ if [[ "$ROLE" == "vps" ]]; then
   echo "VPS endpoint：$VPS_ENDPOINT:$VPS_WG_PORT"
   echo "VPS WireGuard 公钥："
 else
-  echo "家宽 WireGuard 公钥："
+  echo "【必须复制回 VPS】家宽 WireGuard 公钥（复制下面完整一行）："
 fi
 echo "$local_public_key"
 if [[ "$FULL_STACK" == "1" && "$ROLE" == "vps" ]]; then
@@ -1018,15 +1018,26 @@ if [[ "$FULL_STACK" == "1" && "$ROLE" == "vps" ]]; then
   echo "VPS 一行配对码（推荐整行复制到家宽窗口）："
   make_pair_code
   echo
+elif [[ "$FULL_STACK" == "1" && "$ROLE" == "home" && "$PAIR_CODE_LOADED" == "1" ]]; then
+  echo
+  echo "下一步必须回到 VPS SSH 窗口："
+  echo "  1) 复制上面的家宽 WireGuard 公钥完整一行。"
+  echo "  2) 粘贴到 VPS 窗口的“粘贴家宽机公钥”提示后按 Enter。"
+  echo "  3) 两边都完成写入后，WireGuard 才会建立连接。"
 fi
 echo "============================================================"
 echo
+
+if [[ "$FULL_STACK" == "1" && "$ROLE" == "home" && "$PAIR_CODE_LOADED" == "1" && -t 0 ]]; then
+  read -r -p "确认已复制家宽公钥，按 Enter 继续配置本机..." _
+  echo
+fi
 
 if [[ -n "$PAIR_PEER_PUBLIC_KEY" ]]; then
   peer_public_key="$PAIR_PEER_PUBLIC_KEY"
   echo "已从配对码读取 VPS 公钥。"
 elif [[ "$ROLE" == "vps" ]]; then
-  read -r -p "粘贴家宽机公钥：" peer_public_key
+  read -r -p "粘贴家宽机窗口标出的完整公钥：" peer_public_key
 else
   read -r -p "粘贴 VPS 公钥：" peer_public_key
 fi
@@ -1204,6 +1215,12 @@ echo "删除本机这条线路：volwg remove --node $NODE_ID"
 if [[ "$FULL_STACK" == "1" ]]; then
   if [[ "$ROLE" == "home" ]]; then
     echo "SS2022 服务端已安装在本机（家宽机）：$HOME_BACKEND"
+    if [[ "$PAIR_CODE_LOADED" == "1" ]]; then
+      echo
+      echo "【VPS 端尚未完成时】复制下面家宽公钥到 VPS 窗口："
+      echo "$local_public_key"
+      echo "VPS 窗口粘贴并完成配置后，本线路才会握手成功。"
+    fi
   else
     echo "VPS 只运行 WireGuard + nftables；SS2022 服务端位于家宽机。"
   fi
