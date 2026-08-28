@@ -55,7 +55,8 @@ grep -Fq '【VPS 端尚未完成时】复制下面家宽公钥到 VPS 窗口' "$
 grep -Fq '建议节点 ID' "$ROOT_DIR/wg-home-key-wizard.sh"
 grep -Fq '请重新输入；线路显示名称稍后仍可使用大写字母和连字符' "$ROOT_DIR/wg-home-key-wizard.sh"
 grep -Fq '/etc/wg-home-exit/nodes/$candidate.conf' "$ROOT_DIR/wg-home-key-wizard.sh"
-grep -Fq '在显示端口输入框之前先扫描一次' "$ROOT_DIR/wg-home-key-wizard.sh"
+grep -Fq '在显示网段和端口输入框之前先扫描一次' "$ROOT_DIR/wg-home-key-wizard.sh"
+grep -Fq 'WireGuard 网段 ${WG_PREFIX}.0/24 已占用' "$ROOT_DIR/wg-home-key-wizard.sh"
 grep -Fq 'VOLWG1.' "$ROOT_DIR/wg-home-key-wizard.sh"
 grep -Fq '/etc/wireguard/*.conf' "$ROOT_DIR/wg-home-key-wizard.sh"
 grep -Fq 'ssserver --version' "$ROOT_DIR/wg-home-key-wizard.sh"
@@ -73,8 +74,8 @@ grep -Fq '家宽机 SSH 私钥路径' "$ROOT_DIR/wg-home-deploy.sh"
 grep -Fq '输入序号或节点 ID' "$ROOT_DIR/wg-home-manager.sh"
 grep -Fq 'delete-menu|remove-menu' "$ROOT_DIR/wg-home-manager.sh"
 grep -Fq '按序号删除本机线路' "$ROOT_DIR/volwg"
-grep -Fq 'BUILTIN_VERSION="1.4.12"' "$ROOT_DIR/volwg"
-grep -Fxq '1.4.12' "$ROOT_DIR/VERSION"
+grep -Fq 'BUILTIN_VERSION="1.4.13"' "$ROOT_DIR/volwg"
+grep -Fxq '1.4.13' "$ROOT_DIR/VERSION"
 
 menu_output="$(printf '2\n2\n0\n0\n0\n' | "$ROOT_DIR/volwg")"
 grep -Fq '此模式只会' <<<"$menu_output"
@@ -108,6 +109,12 @@ pair_functions="$(awk '/^while \(\(\$#\)\); do/{exit} {print}' "$ROOT_DIR/wg-hom
   VPS_WG_PORT="51830" VPS_SS_PORT="31000" WG_IFACE="wgh_test1"
   select_available_local_ports >/dev/null
   [[ "$VPS_WG_PORT" == "51831" && "$VPS_SS_PORT" == "31001" ]]
+  wg_prefix_in_use() {
+    [[ "$1" == "10.88.0" ]]
+  }
+  WG_PREFIX="10.88.0"
+  select_available_wg_prefix >/dev/null
+  [[ "$WG_PREFIX" == "10.88.1" ]]
   NODE_ID="test1"
   DISPLAY_NAME="测试线路"
   WG_PREFIX="10.99.7"

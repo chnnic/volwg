@@ -129,6 +129,13 @@ valid_port() {
   [[ "$port" =~ ^[0-9]+$ ]] && ((10#$port >= 1 && 10#$port <= 65535))
 }
 
+valid_wg_prefix() {
+  local first="" second="" third="" extra=""
+  IFS=. read -r first second third extra <<<"$1"
+  [[ -z "$extra" && "$first" =~ ^[0-9]+$ && "$second" =~ ^[0-9]+$ && "$third" =~ ^[0-9]+$ ]] || return 1
+  ((10#$first <= 255 && 10#$second <= 255 && 10#$third <= 255))
+}
+
 encode() {
   printf '%s' "$1" | base64 | tr -d '\r\n'
 }
@@ -290,6 +297,68 @@ next_free_port() {
     ((port <= 65535)) || die "从指定起始值开始没有可用端口"
   done
   printf '%s' "$port"
+}
+
+wg_prefix_in_use() {
+  local prefix="$1" file state_node state_prefix line iface
+  local -a config_files state_files
+  shopt -s nullglob
+  config_files=(/etc/wireguard/*.conf)
+  for file in "${config_files[@]}"; do
+    [[ "$file" == "$WG_CONFIG" ]] && continue
+    if grep -Eq "^[[:space:]]*Address[[:space:]]*=.*${prefix//./\\.}\\.[0-9]+/" "$file"; then
+      return 0
+    fi
+  done
+  state_files=(/etc/wg-home-exit/nodes/*.conf /etc/wg-home-exit/manual/*.conf)
+  for file in "${state_files[@]}"; do
+    state_node="$(sed -n 's/^NODE_ID=//p' "$file" | head -n 1)"
+    [[ "$state_node" != "$NODE_ID" ]] || continue
+    state_prefix="$(sed -n 's/^WG_PREFIX=//p' "$file" | head -n 1)"
+    [[ "$state_prefix" == "$prefix" ]] && return 0
+  done
+  while IFS= read -r line; do
+    iface="$(awk '{print $2}' <<<"$line")"
+    iface="${iface%:}"
+    [[ "$iface" == "$WG_IFACE" ]] && continue
+    [[ "$line" == *" $prefix."* ]] && return 0
+  done < <(ip -4 -o addr show 2>/dev/null || true)
+  if command -v uci >/dev/null 2>&1; then
+    while IFS= read -r line; do
+      iface="${line#network.}"
+      iface="${iface%%.*}"
+      [[ "$iface" == "$WG_IFACE" ]] && continue
+      [[ "$line" == *"='$prefix."* ]] && return 0
+    done < <(uci -q show network 2>/dev/null | grep '\.addresses=' || true)
+  fi
+  return 1
+}
+
+next_free_wg_prefix() {
+  local prefix="$1" first="" second="" third="" extra="" candidate index
+  valid_wg_prefix "$prefix" || die "网段前缀格式无效：$prefix"
+  IFS=. read -r first second third extra <<<"$prefix"
+  first=$((10#$first))
+  second=$((10#$second))
+  third=$((10#$third))
+  for ((index=third; index<=255; index++)); do
+    candidate="$first.$second.$index"
+    if ! wg_prefix_in_use "$candidate"; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+  die "从 $prefix.0/24 开始没有可用 WireGuard 网段，请手动指定其他前缀"
+}
+
+select_available_wg_prefix() {
+  local selected_prefix
+  [[ "$ROLE" == "vps" && "$REPLACE_NODE" != "1" ]] || return 0
+  selected_prefix="$(next_free_wg_prefix "$WG_PREFIX")"
+  if [[ "$selected_prefix" != "$WG_PREFIX" ]]; then
+    echo "WireGuard 网段 ${WG_PREFIX}.0/24 已占用，输入默认值改为 ${selected_prefix}.0/24。"
+    WG_PREFIX="$selected_prefix"
+  fi
 }
 
 select_available_local_ports() {
@@ -966,9 +1035,10 @@ if [[ "$ROLE" == "vps" ]]; then
   fi
 fi
 
-# 在显示端口输入框之前先扫描一次，让默认值直接呈现可用端口。
-# 参数输入后还会再次扫描，以处理用户手动填写了已占用端口的情况。
+# 在显示网段和端口输入框之前先扫描一次，让默认值直接呈现可用值。
+# 参数输入后还会再次扫描，以处理用户手动填写了已占用值的情况。
 if [[ "$PAIR_CODE_LOADED" != "1" ]]; then
+  select_available_wg_prefix
   select_available_local_ports
 fi
 
@@ -1025,7 +1095,7 @@ else
   fi
 fi
 
-[[ "$WG_PREFIX" =~ ^([0-9]{1,3}\.){2}[0-9]{1,3}$ ]] || die "网段前缀格式无效"
+valid_wg_prefix "$WG_PREFIX" || die "网段前缀格式无效"
 valid_port "$VPS_WG_PORT" || die "VPS WireGuard 端口无效"
 valid_port "$HOME_WG_PORT" || die "家宽机 WireGuard 端口无效"
 if [[ "$FULL_STACK" == "1" ]]; then
@@ -1033,6 +1103,7 @@ if [[ "$FULL_STACK" == "1" ]]; then
   valid_port "$HOME_SS_PORT" || die "家宽机 SS 端口无效"
 fi
 
+select_available_wg_prefix
 select_available_local_ports
 
 if [[ "$FULL_STACK" == "1" && "$ROLE" == "vps" && -z "$SS_PASSWORD" ]]; then
