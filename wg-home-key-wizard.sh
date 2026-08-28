@@ -209,6 +209,15 @@ fi
 [[ "$ROLE" == "vps" || "$ROLE" == "home" ]] || die "--role 必须是 vps 或 home"
 [[ "$(id -u)" == "0" ]] || die "请使用 root 或 sudo 运行"
 
+echo
+echo "============================================================"
+echo " 当前模式：仅 WireGuard 手动配对"
+echo "============================================================"
+echo "此向导不会安装 ss-rust 或 Xray Core，也不会生成 SS 链接。"
+echo "需要完整落地线路，请退出后运行 volwg，选择："
+echo "  新建线路与配对 → 完整部署：WireGuard + SS2022"
+echo
+
 if command -v uci >/dev/null 2>&1 && command -v opkg >/dev/null 2>&1; then
   SYSTEM_KIND="openwrt"
 elif [[ -r /etc/os-release ]] && command -v systemctl >/dev/null 2>&1; then
@@ -460,6 +469,7 @@ else
   echo "测试：ping $WG_PREFIX.1"
 fi
 echo "删除本机这条线路：volwg remove --node $NODE_ID"
+echo "本模式未安装 SS 服务；需要 SS2022 请使用完整部署入口。"
 echo "私钥不要复制或发送，只交换上面显示的公钥。"
 echo
 wg show "$WG_IFACE" 2>/dev/null || true

@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 REPO_RAW_URL="https://raw.githubusercontent.com/chnnic/volwg/main"
-BUILTIN_VERSION="1.4.5"
+BUILTIN_VERSION="1.4.6"
 
 find_lib_dir() {
   local launcher_dir user_data_dir
@@ -90,13 +90,17 @@ local_node_count() {
   local file id count
   local -a files manual_files
   shopt -s nullglob
-  files=(/etc/wg-home-exit/nodes/*.conf)
-  manual_files=(/etc/wg-home-exit/manual/*.conf)
+  files=()
+  manual_files=()
+  files+=(/etc/wg-home-exit/nodes/*.conf)
+  manual_files+=(/etc/wg-home-exit/manual/*.conf)
   count="${#files[@]}"
-  for file in "${manual_files[@]}"; do
-    id="$(sed -n 's/^NODE_ID=//p' "$file" | head -n 1)"
-    [[ -f "/etc/wg-home-exit/nodes/$id.conf" ]] || ((count++)) || true
-  done
+  if ((${#manual_files[@]} > 0)); then
+    for file in "${manual_files[@]}"; do
+      id="$(sed -n 's/^NODE_ID=//p' "$file" | head -n 1)"
+      [[ -f "/etc/wg-home-exit/nodes/$id.conf" ]] || ((count++)) || true
+    done
+  fi
   printf '%s' "$count"
 }
 
@@ -176,21 +180,52 @@ remote_manager() {
   ssh -t "${ssh_args[@]}" "$target" "volwg manager"
 }
 
+confirm_wireguard_only() {
+  local role_label="$1" answer
+  clear_screen
+  print_header
+  print_menu_title "仅 WireGuard 手动配对"
+  echo "当前选择：$role_label"
+  echo
+  echo "此模式只会："
+  echo "  - 创建独立 WireGuard 接口、密钥和隧道配置"
+  echo "  - 不安装 ss-rust"
+  echo "  - 不安装或配置 Xray Core"
+  echo "  - 不生成 SS 链接，也不创建公网 SS 转发"
+  echo
+  echo "需要完整家宽落地线路，请返回选择："
+  echo "  1) 完整部署：WireGuard + SS2022（推荐）"
+  echo
+  read -r -p "输入 1 继续仅 WireGuard，输入 0 返回 [0]：" answer
+  [[ "$answer" == "1" ]]
+}
+
 deployment_menu() {
   local choice
   while true; do
     clear_screen
     print_header
     print_menu_title "主菜单 > 新建线路与配对"
-    echo "  1) 全自动部署新线路（推荐）"
-    echo "  2) 多节点手动配对：当前机器是 VPS（仅 WireGuard）"
-    echo "  3) 多节点手动配对：当前机器是家宽机（仅 WireGuard）"
+    echo "  1) 完整部署：WireGuard + SS2022（推荐）"
+    echo "     自动在家宽机安装 ss-rust 或 Xray，并生成 SS 链接"
+    echo "  2) 仅 WireGuard：当前机器是 VPS"
+    echo "  3) 仅 WireGuard：当前机器是家宽机"
     echo "  0) 返回主菜单    q) 退出"
     read -r -p "请选择 [0-3/q]：" choice
     case "$choice" in
       1) bash "$LIB_DIR/wg-home-deploy.sh" --guided; pause_screen ;;
-      2) bash "$LIB_DIR/wg-home-key-wizard.sh" --role vps; pause_screen ;;
-      3) bash "$LIB_DIR/wg-home-key-wizard.sh" --role home; pause_screen ;;
+      2)
+        if confirm_wireguard_only "VPS"; then
+          bash "$LIB_DIR/wg-home-key-wizard.sh" --role vps
+          pause_screen
+        fi
+        ;;
+      3)
+        if confirm_wireguard_only "家宽机"; then
+          bash "$LIB_DIR/wg-home-key-wizard.sh" --role home
+          pause_screen
+        fi
+        ;;
       0) return ;;
       q|Q) clear_screen; exit 0 ;;
       *) echo "选择无效。"; pause_screen ;;
@@ -255,10 +290,10 @@ show_help() {
   cat <<'EOF'
 VolWG 命令：
   volwg                    打开多级引导界面
-  volwg deploy [参数]      部署线路
+  volwg deploy [参数]      完整部署 WireGuard + SS2022 线路
   volwg manager            打开本机线路管理界面
   volwg manager links      查看本机保存的全部 SS 链接
-  volwg key [参数]         双 SSH 窗口公钥向导
+  volwg key [参数]         仅 WireGuard：双 SSH 窗口公钥向导
   volwg remove --node ID   删除本机指定线路并归档配置
   volwg version            查看本地和在线版本
   volwg update             在线升级

@@ -117,7 +117,7 @@ Debian LXC 可以作为家宽端或中转端使用，但容器必须拥有 `NET_
 
     git clone https://github.com/chnnic/volwg.git
     cd volwg
-    chmod 700 wg-home-deploy.sh wg-home-key-wizard.sh wg-home-manager.sh
+    chmod 700 wg-home-deploy.sh wg-home-key-wizard.sh wg-home-manager.sh wg-home-remove.sh
     chmod 755 volwg
 
 直接运行主脚本：
@@ -133,12 +133,15 @@ Debian LXC 可以作为家宽端或中转端使用，但容器必须拥有 `NET_
 
 “新建线路与配对”子菜单：
 
-    1) 全自动部署新线路（推荐）
-    2) 手动配对：当前机器是 VPS
-    3) 手动配对：当前机器是家宽机
+    1) 完整部署：WireGuard + SS2022（推荐）
+       自动在家宽机安装 ss-rust 或 Xray，并生成 SS 链接
+    2) 仅 WireGuard：当前机器是 VPS
+    3) 仅 WireGuard：当前机器是家宽机
     0) 返回主菜单
 
-选择全自动部署后，向导按“线路信息 → SSH 连接 → WireGuard 网络 → Shadowsocks 入口”四步收集配置，不需要记忆命令行参数。
+选择完整部署后，向导按“线路信息 → 家宽 SS 后端 → SSH 连接 → WireGuard 网络 → Shadowsocks 入口”收集配置，不需要记忆命令行参数。`ss-rust/Xray Core` 选择只决定家宽机安装哪个 SS2022 服务端；VPS 始终只安装 WireGuard 与 nftables。
+
+选择第 2/3 项前，界面会再次提示“仅 WireGuard”不会安装 ss-rust/Xray、不会生成 SS 链接。只有明确输入 `1` 确认后才会进入公钥配对，避免把它误认为完整部署。
 
 在线路管理中选择本机管理时，VolWG 会直接打开本机线路后台，不再要求重复输入本机 SSH；也可以选择连接远程 VPS 管理。
 
@@ -217,7 +220,7 @@ Debian LXC 可以作为家宽端或中转端使用，但容器必须拥有 `NET_
 选择：
 
     2) 新建线路与配对
-    2) 手动配对：当前机器是 VPS
+    2) 仅 WireGuard：当前机器是 VPS
 
 窗口 B，家宽机：
 
@@ -226,7 +229,7 @@ Debian LXC 可以作为家宽端或中转端使用，但容器必须拥有 `NET_
 选择：
 
     2) 新建线路与配对
-    3) 手动配对：当前机器是家宽机
+    3) 仅 WireGuard：当前机器是家宽机
 
 两边都会：
 
@@ -247,7 +250,7 @@ Debian LXC 可以作为家宽端或中转端使用，但容器必须拥有 `NET_
     sudo ./volwg key --role vps
     sudo ./volwg key --role home
 
-手动配对只配置 WireGuard。如果还需要自动安装 ss-rust/Xray、生成公网与私网 SS 链接，请选择“全自动部署新线路”。
+手动配对只配置 WireGuard。如果还需要自动安装 ss-rust/Xray、生成公网与私网 SS 链接，请选择“完整部署：WireGuard + SS2022”。
 
 OpenWrt 首次安装 WireGuard 后，向导会提示运行：
 

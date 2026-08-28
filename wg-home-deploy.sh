@@ -132,6 +132,18 @@ prompt_with_default() {
   printf '%s' "${answer:-$default_value}"
 }
 
+confirm_wireguard_only() {
+  local role_label="$1" answer
+  echo
+  echo "------------------------------------------------------------"
+  echo "当前选择：仅 WireGuard 手动配对（$role_label）"
+  echo "此模式不会安装 ss-rust/Xray，不会生成 SS 链接或公网转发。"
+  echo "需要完整线路，请返回选择 [完整部署：WireGuard + SS2022]。"
+  echo "------------------------------------------------------------"
+  read -r -p "输入 1 继续仅 WireGuard，输入 0 返回 [0]：" answer
+  [[ "$answer" == "1" ]]
+}
+
 guided_full_deploy() {
   local mode_choice backend_choice public_ss_choice identity_answer default_public_host node_answer name_answer
 
@@ -161,9 +173,10 @@ guided_full_deploy() {
     *) die "部署结构选择无效" ;;
   esac
   echo
-  echo "家宽机 SS2022 服务端："
-  echo "  1) ss-rust ssserver（推荐，轻量）"
-  echo "  2) Xray Core（兼容模式）"
+  echo "选择安装在家宽机上的 SS2022 服务端："
+  echo "  1) ss-rust ssserver（推荐，轻量；只安装在家宽机）"
+  echo "  2) Xray Core（兼容模式；只安装在家宽机）"
+  echo "  提示：VPS 只安装 WireGuard + nftables，不运行 SS 服务端。"
   read -r -p "请选择 [1-2，默认 1]：" backend_choice
   case "${backend_choice:-1}" in
     1) HOME_BACKEND="ss-rust" ;;
@@ -211,10 +224,10 @@ if (($# == 0)); then
   echo "============================================================"
   echo " VolWG 多线路家宽落地部署向导"
   echo "============================================================"
-  echo "  1) 全自动部署新线路（推荐）"
+  echo "  1) 完整部署：WireGuard + SS2022（推荐）"
   echo "  2) 管理已部署线路"
-  echo "  3) 多节点手动配对：当前机器是 VPS（仅 WireGuard）"
-  echo "  4) 多节点手动配对：当前机器是家宽机（仅 WireGuard）"
+  echo "  3) 仅 WireGuard：当前机器是 VPS"
+  echo "  4) 仅 WireGuard：当前机器是家宽机"
   echo "  5) 查看帮助"
   echo "  0) 退出"
   read -r -p "请选择 [0-5]：" entry_choice
@@ -236,11 +249,17 @@ if (($# == 0)); then
       ;;
     3)
       [[ -f "$SCRIPT_DIR/wg-home-key-wizard.sh" ]] || die "缺少 wg-home-key-wizard.sh"
-      exec bash "$SCRIPT_DIR/wg-home-key-wizard.sh" --role vps
+      if confirm_wireguard_only "VPS"; then
+        exec bash "$SCRIPT_DIR/wg-home-key-wizard.sh" --role vps
+      fi
+      exit 0
       ;;
     4)
       [[ -f "$SCRIPT_DIR/wg-home-key-wizard.sh" ]] || die "缺少 wg-home-key-wizard.sh"
-      exec bash "$SCRIPT_DIR/wg-home-key-wizard.sh" --role home
+      if confirm_wireguard_only "家宽机"; then
+        exec bash "$SCRIPT_DIR/wg-home-key-wizard.sh" --role home
+      fi
+      exit 0
       ;;
     5) usage; exit 0 ;;
     0) exit 0 ;;
@@ -496,6 +515,9 @@ if [[ -n "$vps_detected_ipv4" ]]; then
 fi
 echo "家宽机：${OPENWRT_TARGET}（SSH ${OPENWRT_SSH_PORT}）"
 echo "家宽服务端：$HOME_BACKEND"
+echo "组件安装位置："
+echo "  VPS：WireGuard + nftables 转发（不安装 SS 服务端）"
+echo "  家宽机：WireGuard + $HOME_BACKEND SS2022 服务端"
 echo "WireGuard：${WG_IFACE}，${WG_PREFIX}.1 ↔ ${WG_PREFIX}.2"
 echo "  VPS 公网 UDP：$VPS_WG_PORT"
 echo "  家宽机本地 UDP：$HOME_WG_PORT"
@@ -1152,6 +1174,13 @@ echo
 echo "线路名称：$DISPLAY_NAME"
 echo "节点 ID：$NODE_ID"
 echo "家宽服务端：$HOME_BACKEND"
+if [[ "$home_kind" == "openwrt" ]]; then
+  echo "家宽 SS 服务：/etc/init.d/$HOME_SERVICE"
+  echo "检查命令：/etc/init.d/$HOME_SERVICE status"
+else
+  echo "家宽 SS 服务：$HOME_SERVICE.service"
+  echo "检查命令：systemctl status $HOME_SERVICE"
+fi
 echo "加密方式：2022-blake3-aes-128-gcm"
 echo "密码：$ss_password"
 if [[ "$PUBLIC_SS_ENABLED" == "1" ]]; then

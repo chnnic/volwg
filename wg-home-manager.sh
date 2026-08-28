@@ -29,13 +29,17 @@ manager_header() {
   local title="$1" file id count=0
   local -a files manual_files
   shopt -s nullglob
-  files=("$STATE_DIR"/*.conf)
-  manual_files=("$MANUAL_STATE_DIR"/*.conf)
+  files=()
+  manual_files=()
+  files+=("$STATE_DIR"/*.conf)
+  manual_files+=("$MANUAL_STATE_DIR"/*.conf)
   count="${#files[@]}"
-  for file in "${manual_files[@]}"; do
-    id="$(field "$file" NODE_ID)"
-    [[ -f "$STATE_DIR/$id.conf" ]] || ((count++)) || true
-  done
+  if ((${#manual_files[@]} > 0)); then
+    for file in "${manual_files[@]}"; do
+      id="$(field "$file" NODE_ID)"
+      [[ -f "$STATE_DIR/$id.conf" ]] || ((count++)) || true
+    done
+  fi
   echo "============================================================"
   echo " VolWG 线路管理 · $title"
   echo " 已登记线路：$count 条"
@@ -240,7 +244,8 @@ choose_node() {
   local -a files
   SELECTED_NODE=""
   shopt -s nullglob
-  files=("$STATE_DIR"/*.conf)
+  files=()
+  files+=("$STATE_DIR"/*.conf)
   clear_screen
   manager_header "选择线路"
   if ((${#files[@]} == 0)); then
@@ -269,7 +274,9 @@ choose_removable_node() {
   local -a files selected_files
   SELECTED_NODE=""
   shopt -s nullglob
-  files=("$STATE_DIR"/*.conf "$MANUAL_STATE_DIR"/*.conf)
+  files=()
+  selected_files=()
+  files+=("$STATE_DIR"/*.conf "$MANUAL_STATE_DIR"/*.conf)
   clear_screen
   manager_header "选择要删除的线路"
   if ((${#files[@]} == 0)); then
@@ -290,6 +297,7 @@ choose_removable_node() {
     selected_files+=("$file")
     ((index++))
   done
+  ((${#selected_files[@]} > 0)) || { echo "尚未登记可删除的线路。"; pause_screen; return 1; }
   echo "  0) 返回线路菜单"
   read -r -p "请选择线路 [0-$((${#selected_files[@]}))]：" choice
   [[ "$choice" =~ ^[0-9]+$ ]] || { echo "选择无效。"; pause_screen; return 1; }
@@ -319,8 +327,11 @@ node_status() {
 }
 
 legacy_notice() {
-  local files=("$STATE_DIR"/*.conf)
-  if [[ ! -e "${files[0]}" && -f /etc/wireguard/wg-home.conf ]]; then
+  local -a files
+  shopt -s nullglob
+  files=()
+  files+=("$STATE_DIR"/*.conf)
+  if ((${#files[@]} == 0)) && [[ -f /etc/wireguard/wg-home.conf ]]; then
     echo "检测到旧版单线路配置：/etc/wireguard/wg-home.conf"
     echo "旧版没有在 VPS 保存 SS 密钥/链接，因此无法自动重建链接。"
     echo '请执行“登记已有 SS 线路”，粘贴原 SS 链接后即可在后台查看。'
