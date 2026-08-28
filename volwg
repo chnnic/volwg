@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 REPO_RAW_URL="https://raw.githubusercontent.com/chnnic/volwg/main"
-BUILTIN_VERSION="1.4.7"
+BUILTIN_VERSION="1.4.8"
 
 find_lib_dir() {
   local launcher_dir user_data_dir
@@ -254,7 +254,7 @@ deployment_menu() {
 }
 
 management_menu() {
-  local choice remove_node
+  local choice
   while true; do
     clear_screen
     print_header
@@ -263,7 +263,7 @@ management_menu() {
     echo "  2) 快速查看全部 SS 链接"
     echo "  3) 快速查看线路状态"
     echo "  4) 连接远程 VPS 管理"
-    echo "  5) 删除本机指定线路"
+    echo "  5) 按序号删除本机线路"
     echo "  0) 返回主菜单    q) 退出"
     read -r -p "请选择 [0-5/q]：" choice
     case "$choice" in
@@ -271,12 +271,7 @@ management_menu() {
       2) clear_screen; bash "$LIB_DIR/wg-home-manager.sh" links; pause_screen ;;
       3) clear_screen; bash "$LIB_DIR/wg-home-manager.sh" status; pause_screen ;;
       4) remote_manager; pause_screen ;;
-      5)
-        read -r -p "请输入要删除的节点 ID（留空取消）：" remove_node
-        [[ -n "$remove_node" ]] || continue
-        bash "$LIB_DIR/wg-home-remove.sh" --node "$remove_node"
-        pause_screen
-        ;;
+      5) bash "$LIB_DIR/wg-home-manager.sh" delete-menu; pause_screen ;;
       0) return ;;
       q|Q) clear_screen; exit 0 ;;
       *) echo "选择无效。"; pause_screen ;;

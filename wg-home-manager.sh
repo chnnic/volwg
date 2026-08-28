@@ -57,6 +57,7 @@ usage() {
   volwg manager node ID [格式]   生成图形化 Xray 可导入节点
   volwg manager rename ID 名称   修改线路名称和 SS 链接备注
   volwg manager delete ID        删除 VPS 端指定线路并归档配置
+  volwg manager delete-menu      列出现有线路，按序号或节点 ID 删除
   volwg manager register         登记旧版本或手工创建的 SS 线路
   volwg manager                  打开交互式管理菜单
 
@@ -299,11 +300,22 @@ choose_removable_node() {
   done
   ((${#selected_files[@]} > 0)) || { echo "尚未登记可删除的线路。"; pause_screen; return 1; }
   echo "  0) 返回线路菜单"
-  read -r -p "请选择线路 [0-$((${#selected_files[@]}))]：" choice
-  [[ "$choice" =~ ^[0-9]+$ ]] || { echo "选择无效。"; pause_screen; return 1; }
-  ((choice == 0)) && return 1
-  ((choice >= 1 && choice <= ${#selected_files[@]})) || { echo "选择无效。"; pause_screen; return 1; }
-  SELECTED_NODE="$(field "${selected_files[choice-1]}" NODE_ID)"
+  read -r -p "输入序号或节点 ID（0 返回） [0-$((${#selected_files[@]}))]：" choice
+  [[ "$choice" == "0" || "$choice" == "q" || "$choice" == "Q" ]] && return 1
+  if [[ "$choice" =~ ^[0-9]+$ ]] && ((choice >= 1 && choice <= ${#selected_files[@]})); then
+    SELECTED_NODE="$(field "${selected_files[choice-1]}" NODE_ID)"
+    return 0
+  fi
+  for file in "${selected_files[@]}"; do
+    id="$(field "$file" NODE_ID)"
+    if [[ "$choice" == "$id" ]]; then
+      SELECTED_NODE="$id"
+      return 0
+    fi
+  done
+  echo "选择无效：请输入列表序号或现有节点 ID。"
+  pause_screen
+  return 1
 }
 
 node_status() {
@@ -551,7 +563,7 @@ rename_node() {
 }
 
 delete_node() {
-  local file="$1" id name role
+  local file="$1" id name role confirmation
   [[ "$(id -u)" == "0" ]] || die "删除线路需要 root，请使用 sudo"
   [[ -x "$SCRIPT_DIR/wg-home-remove.sh" ]] || die "缺少 wg-home-remove.sh，请先运行 volwg update"
   id="$(field "$file" NODE_ID)"
@@ -564,7 +576,19 @@ delete_node() {
   fi
   echo "配置文件将先归档，可恢复。"
   echo
-  bash "$SCRIPT_DIR/wg-home-remove.sh" --node "$id" --role "$role"
+  read -r -p "输入 yes 确认删除，其他内容取消：" confirmation
+  if [[ "$confirmation" != "yes" ]]; then
+    echo "已取消删除。"
+    return 0
+  fi
+  bash "$SCRIPT_DIR/wg-home-remove.sh" --node "$id" --role "$role" --yes
+}
+
+interactive_delete() {
+  choose_removable_node || return 0
+  clear_screen
+  manager_header "删除线路 · $SELECTED_NODE"
+  delete_node "$(removable_file "$SELECTED_NODE")"
 }
 
 register_node() {
@@ -716,13 +740,7 @@ menu() {
         rename_node "$(node_file "$SELECTED_NODE")" "$new_name"
         pause_screen
         ;;
-      7)
-        choose_removable_node || continue
-        clear_screen
-        manager_header "删除线路 · $SELECTED_NODE"
-        delete_node "$(removable_file "$SELECTED_NODE")"
-        pause_screen
-        ;;
+      7) interactive_delete; pause_screen ;;
       8) clear_screen; manager_header "登记已有线路"; register_node; pause_screen ;;
       0) return ;;
       q|Q) clear_screen; exit 0 ;;
@@ -741,6 +759,7 @@ case "$command_name" in
   node|export) [[ -n "${2:-}" ]] || die "用法：volwg manager node ID [ss|xray|routing|all]"; export_node "$(node_file "$2")" "${3:-all}" ;;
   rename) [[ -n "${2:-}" && -n "${3:-}" ]] || die "用法：volwg manager rename ID 新名称"; rename_node "$(node_file "$2")" "$3" ;;
   delete|remove) [[ -n "${2:-}" ]] || die "用法：volwg manager delete ID"; delete_node "$(removable_file "$2")" ;;
+  delete-menu|remove-menu) interactive_delete ;;
   register) register_node ;;
   menu) menu ;;
   -h|--help|help) usage ;;

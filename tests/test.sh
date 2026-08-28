@@ -51,8 +51,11 @@ grep -Fq -- '--home-identity PATH' "$ROOT_DIR/wg-home-deploy.sh"
 grep -Fq 'FRP、端口映射、LAN 或 VPN/Tailscale 地址' "$ROOT_DIR/wg-home-deploy.sh"
 grep -Fq 'VPS SSH 私钥路径' "$ROOT_DIR/wg-home-deploy.sh"
 grep -Fq '家宽机 SSH 私钥路径' "$ROOT_DIR/wg-home-deploy.sh"
-grep -Fq 'BUILTIN_VERSION="1.4.7"' "$ROOT_DIR/volwg"
-grep -Fxq '1.4.7' "$ROOT_DIR/VERSION"
+grep -Fq '输入序号或节点 ID' "$ROOT_DIR/wg-home-manager.sh"
+grep -Fq 'delete-menu|remove-menu' "$ROOT_DIR/wg-home-manager.sh"
+grep -Fq '按序号删除本机线路' "$ROOT_DIR/volwg"
+grep -Fq 'BUILTIN_VERSION="1.4.8"' "$ROOT_DIR/volwg"
+grep -Fxq '1.4.8' "$ROOT_DIR/VERSION"
 
 menu_output="$(printf '2\n2\n0\n0\n0\n' | "$ROOT_DIR/volwg")"
 grep -Fq '此模式只会' <<<"$menu_output"
@@ -66,5 +69,11 @@ remote_line="$(grep -n -m1 '控制端远程全自动部署' <<<"$deploy_menu_out
 if grep -Fq '控制端远程全自动部署（推荐）' <<<"$deploy_menu_output"; then
   exit 1
 fi
+
+delete_menu_output="$(printf '0\n' | WG_HOME_STATE_DIR="$TEST_DIR/nodes" WG_HOME_MANUAL_STATE_DIR="$TEST_DIR/manual" bash "$ROOT_DIR/wg-home-manager.sh" delete-menu)"
+grep -Fq '主线路' <<<"$delete_menu_output"
+grep -Fq '[line1 / 完整线路]' <<<"$delete_menu_output"
+grep -Fq '备用家宽' <<<"$delete_menu_output"
+grep -Fq '[home2 / 仅 WireGuard/vps]' <<<"$delete_menu_output"
 
 echo "VolWG tests: PASS"

@@ -387,7 +387,9 @@ SS2022、SSH 私钥和 WireGuard 私钥均属于敏感信息，不要公开。
 
 ## 删除线路
 
-在 VPS 的线路管理菜单中选择“删除线路”，或直接执行：
+在 VPS 的线路管理菜单中选择“按序号删除本机线路”。界面会先列出线路名称、节点 ID 和本机角色，可以输入列表序号，也可以直接输入已有节点 ID；选中后输入 `yes` 二次确认。
+
+也可以直接执行：
 
     sudo volwg manager delete line1
 
@@ -395,7 +397,7 @@ SS2022、SSH 私钥和 WireGuard 私钥均属于敏感信息，不要公开。
 
     sudo volwg remove --node line1 --role home
 
-也可以在任意一端直接使用 `volwg remove --node line1`，由脚本自动判断当前角色。删除时必须再次输入完整节点 ID；所有文件先移动到以下归档目录，不会永久擦除：
+也可以在任意一端直接使用 `volwg remove --node line1`，由脚本自动判断当前角色。直接命令模式删除时必须再次输入完整节点 ID；所有文件先移动到以下归档目录，不会永久擦除：
 
     /etc/wg-home-exit/removed/时间-节点ID-角色/
 
