@@ -14,6 +14,9 @@ HOME_SS_PORT="31000"
 HOME_BACKEND="ss-rust"
 MODE="relay"
 PUBLIC_SS_ENABLED="1"
+REMOTE_SSH_ENABLED="0"
+HOME_SSH_PORT="22"
+REMOTE_SSH_CONFIGURED="0"
 SS_PASSWORD=""
 SS_RUST_VERSION="v1.25.0"
 REPLACE_NODE="0"
@@ -61,6 +64,8 @@ WireGuard 接口、密钥和配置，默认不会覆盖其他节点。占用的�
   --home-backend TYPE     家宽服务端：ss-rust（默认）或 xray
   --ss-password KEY       SS2022 AES-128 密钥；通常在双窗口间复制粘贴
   --public-ss on|off      是否在 VPS 开放公网 SS，默认 on
+  --remote-ssh on|off     是否允许 VPS 通过 WireGuard 进入家宽 SSH，默认 off
+  --home-ssh-port PORT    家宽机实际 SSH 监听端口，默认 22
   --mode relay|direct     默认推荐公网或私网入口，默认 relay
   --replace               明确替换相同节点 ID；替换前自动备份
   -h, --help
@@ -212,7 +217,8 @@ pair_field() {
 load_pair_code() {
   local code="$1" payload encoded_name decoded_node decoded_name decoded_prefix decoded_endpoint
   local decoded_vps_wg_port decoded_home_wg_port decoded_vps_ss_port decoded_home_ss_port
-  local decoded_backend decoded_mode decoded_public_ss decoded_password decoded_public_key
+  local decoded_backend decoded_mode decoded_public_ss decoded_remote_ssh decoded_home_ssh_port
+  local decoded_password decoded_public_key
   [[ "$code" == VOLWG1.* ]] || { echo "错误：配对码格式无效，必须以 VOLWG1. 开头" >&2; return 1; }
   payload="$(base64url_decode "${code#VOLWG1.}")" || { echo "错误：配对码无法解码；当前系统需要 base64 或 openssl" >&2; return 1; }
   [[ "$(pair_field "$payload" FORMAT)" == "VOLWG1" ]] || { echo "错误：配对码版本无效" >&2; return 1; }
@@ -228,6 +234,10 @@ load_pair_code() {
   decoded_backend="$(pair_field "$payload" HOME_BACKEND)"
   decoded_mode="$(pair_field "$payload" MODE)"
   decoded_public_ss="$(pair_field "$payload" PUBLIC_SS_ENABLED)"
+  decoded_remote_ssh="$(pair_field "$payload" REMOTE_SSH_ENABLED)"
+  decoded_home_ssh_port="$(pair_field "$payload" HOME_SSH_PORT)"
+  decoded_remote_ssh="${decoded_remote_ssh:-0}"
+  decoded_home_ssh_port="${decoded_home_ssh_port:-22}"
   decoded_password="$(pair_field "$payload" SS_PASSWORD)"
   decoded_public_key="$(pair_field "$payload" VPS_PUBLIC_KEY)"
 
@@ -242,6 +252,8 @@ load_pair_code() {
   [[ "$decoded_backend" == "ss-rust" || "$decoded_backend" == "xray" ]] || { echo "错误：配对码 SS 服务端无效" >&2; return 1; }
   [[ "$decoded_mode" == "relay" || "$decoded_mode" == "direct" ]] || { echo "错误：配对码模式无效" >&2; return 1; }
   [[ "$decoded_public_ss" == "0" || "$decoded_public_ss" == "1" ]] || { echo "错误：配对码公网 SS 开关无效" >&2; return 1; }
+  [[ "$decoded_remote_ssh" == "0" || "$decoded_remote_ssh" == "1" ]] || { echo "错误：配对码隧道 SSH 开关无效" >&2; return 1; }
+  valid_port "$decoded_home_ssh_port" || { echo "错误：配对码家宽 SSH 端口无效" >&2; return 1; }
   valid_ss_password "$decoded_password" || { echo "错误：配对码 SS2022 密钥无效" >&2; return 1; }
   valid_wg_key "$decoded_public_key" || { echo "错误：配对码 VPS WireGuard 公钥无效" >&2; return 1; }
 
@@ -256,6 +268,9 @@ load_pair_code() {
   HOME_BACKEND="$decoded_backend"
   MODE="$decoded_mode"
   PUBLIC_SS_ENABLED="$decoded_public_ss"
+  REMOTE_SSH_ENABLED="$decoded_remote_ssh"
+  HOME_SSH_PORT="$decoded_home_ssh_port"
+  REMOTE_SSH_CONFIGURED="1"
   SS_PASSWORD="$decoded_password"
   PAIR_PEER_PUBLIC_KEY="$decoded_public_key"
   PAIR_CODE_LOADED="1"
@@ -276,6 +291,8 @@ HOME_SS_PORT=$HOME_SS_PORT
 HOME_BACKEND=$HOME_BACKEND
 MODE=$MODE
 PUBLIC_SS_ENABLED=$PUBLIC_SS_ENABLED
+REMOTE_SSH_ENABLED=$REMOTE_SSH_ENABLED
+HOME_SSH_PORT=$HOME_SSH_PORT
 SS_PASSWORD=$SS_PASSWORD
 VPS_PUBLIC_KEY=$local_public_key
 EOF
@@ -519,6 +536,8 @@ VPS_ENDPOINT=$VPS_ENDPOINT
 FULL_STACK=$FULL_STACK
 MODE=$MODE
 PUBLIC_SS_ENABLED=$PUBLIC_SS_ENABLED
+REMOTE_SSH_ENABLED=$REMOTE_SSH_ENABLED
+HOME_SSH_PORT=$HOME_SSH_PORT
 HOME_BACKEND=$HOME_BACKEND
 VPS_SS_PORT=$VPS_SS_PORT
 HOME_SS_PORT=$HOME_SS_PORT
@@ -526,9 +545,22 @@ EOF
   chmod 600 "$state_file"
 }
 
+find_working_ssserver() {
+  local candidate resolved=""
+  resolved="$(command -v ssserver 2>/dev/null || true)"
+  for candidate in /usr/bin/ssserver /usr/local/bin/ssserver "$resolved"; do
+    [[ -n "$candidate" && -x "$candidate" ]] || continue
+    if "$candidate" --version >/dev/null 2>&1; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
 install_ssrust() {
   local machine target archive base_url work_dir
-  if command -v ssserver >/dev/null 2>&1 && ssserver --version >/dev/null 2>&1; then
+  if find_working_ssserver >/dev/null; then
     return
   fi
   if command -v ssserver >/dev/null 2>&1; then
@@ -537,7 +569,10 @@ install_ssrust() {
   machine="$(uname -m)"
   if [[ "$SYSTEM_KIND" == "openwrt" ]]; then
     opkg update >/dev/null 2>&1 || true
-    if opkg install shadowsocks-rust-ssserver >/dev/null 2>&1 && command -v ssserver >/dev/null 2>&1; then
+    if opkg install shadowsocks-rust-ssserver >/dev/null 2>&1; then
+      hash -r 2>/dev/null || true
+    fi
+    if find_working_ssserver >/dev/null; then
       return
     fi
     opkg install ca-bundle curl xz >/dev/null 2>&1 || opkg install ca-bundle curl xz-utils >/dev/null 2>&1 || true
@@ -588,8 +623,7 @@ install_ssrust() {
   cp "$work_dir/ssserver" /usr/local/bin/ssserver
   chmod 755 /usr/local/bin/ssserver
   rm -rf -- "$work_dir"
-  command -v ssserver >/dev/null 2>&1 || die "ss-rust ssserver 安装失败"
-  ssserver --version >/dev/null 2>&1 || die "ss-rust 安装后运行自检失败"
+  find_working_ssserver >/dev/null || die "ss-rust 安装后运行自检失败"
 }
 
 install_xray() {
@@ -618,7 +652,7 @@ configure_home_ss() {
     install_ssrust
     service_name="ssrust-wgh-$NODE_ID"
     other_service="xray-wgh-$NODE_ID"
-    backend_bin="$(command -v ssserver 2>/dev/null || printf '%s' /usr/local/bin/ssserver)"
+    backend_bin="$(find_working_ssserver)" || die "找不到可运行的 ss-rust ssserver"
     config_dir="/etc/ss-rust-wg-home/$NODE_ID"
     config_file="$config_dir/config.json"
     mkdir -p "$config_dir"
@@ -707,14 +741,23 @@ EOF
     cat >"/usr/local/sbin/wgh-input-$NODE_ID" <<EOF
 #!/bin/sh
 set -eu
+CHAIN="VWGI_$NODE_ID"
 case "\${1:-start}" in
   start)
-    iptables -w -C INPUT -i $WG_IFACE -p tcp --dport $HOME_SS_PORT -j ACCEPT 2>/dev/null || iptables -w -I INPUT 1 -i $WG_IFACE -p tcp --dport $HOME_SS_PORT -j ACCEPT
-    iptables -w -C INPUT -i $WG_IFACE -p udp --dport $HOME_SS_PORT -j ACCEPT 2>/dev/null || iptables -w -I INPUT 1 -i $WG_IFACE -p udp --dport $HOME_SS_PORT -j ACCEPT
+    iptables -w -N "\$CHAIN" 2>/dev/null || iptables -w -F "\$CHAIN"
+    iptables -w -A "\$CHAIN" -p icmp -j ACCEPT
+    iptables -w -A "\$CHAIN" -p tcp --dport $HOME_SS_PORT -j ACCEPT
+    iptables -w -A "\$CHAIN" -p udp --dport $HOME_SS_PORT -j ACCEPT
+    if [ "$REMOTE_SSH_ENABLED" = "1" ]; then
+      iptables -w -A "\$CHAIN" -p tcp --dport $HOME_SSH_PORT -j ACCEPT
+    fi
+    iptables -w -A "\$CHAIN" -j REJECT
+    iptables -w -C INPUT -i $WG_IFACE -j "\$CHAIN" 2>/dev/null || iptables -w -I INPUT 1 -i $WG_IFACE -j "\$CHAIN"
     ;;
   stop)
-    iptables -w -D INPUT -i $WG_IFACE -p tcp --dport $HOME_SS_PORT -j ACCEPT 2>/dev/null || true
-    iptables -w -D INPUT -i $WG_IFACE -p udp --dport $HOME_SS_PORT -j ACCEPT 2>/dev/null || true
+    iptables -w -D INPUT -i $WG_IFACE -j "\$CHAIN" 2>/dev/null || true
+    iptables -w -F "\$CHAIN" 2>/dev/null || true
+    iptables -w -X "\$CHAIN" 2>/dev/null || true
     ;;
 esac
 EOF
@@ -854,6 +897,8 @@ NODE_ID=$NODE_ID
 DISPLAY_NAME_B64=$(encode "$DISPLAY_NAME")
 MODE=$MODE
 PUBLIC_SS_ENABLED=$PUBLIC_SS_ENABLED
+REMOTE_SSH_ENABLED=$REMOTE_SSH_ENABLED
+HOME_SSH_PORT=$HOME_SSH_PORT
 HOME_BACKEND=$HOME_BACKEND
 WG_INTERFACE=$WG_IFACE
 WG_PORT=$VPS_WG_PORT
@@ -910,6 +955,16 @@ while (($#)); do
       esac
       shift 2
       ;;
+    --remote-ssh)
+      case "${2:-}" in
+        on) REMOTE_SSH_ENABLED="1" ;;
+        off) REMOTE_SSH_ENABLED="0" ;;
+        *) die "--remote-ssh 必须是 on 或 off" ;;
+      esac
+      REMOTE_SSH_CONFIGURED="1"
+      shift 2
+      ;;
+    --home-ssh-port) HOME_SSH_PORT="${2:-}"; REMOTE_SSH_CONFIGURED="1"; shift 2 ;;
     --mode) MODE="${2:-}"; shift 2 ;;
     --replace) REPLACE_NODE="1"; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -1132,6 +1187,21 @@ if [[ "$FULL_STACK" == "1" ]]; then
       *) die "公网 SS 选择无效" ;;
     esac
   fi
+  if [[ "$PAIR_CODE_LOADED" != "1" && "$REMOTE_SSH_CONFIGURED" != "1" ]]; then
+    echo "隧道内远程 SSH（从 VPS 的 VolWG 菜单进入家宽机）："
+    echo "  1) 关闭（默认）"
+    echo "  2) 开启；只允许从该 WireGuard 隧道访问"
+    read -r -p "请选择 [1-2，默认 1]：" remote_ssh_choice
+    case "${remote_ssh_choice:-1}" in
+      1) REMOTE_SSH_ENABLED="0" ;;
+      2)
+        REMOTE_SSH_ENABLED="1"
+        HOME_SSH_PORT="$(prompt_default "家宽机实际 SSH 监听端口（不是 FRP 外部端口）" "$HOME_SSH_PORT")"
+        ;;
+      *) die "隧道内 SSH 选择无效" ;;
+    esac
+    REMOTE_SSH_CONFIGURED="1"
+  fi
 else
   WG_PREFIX="$(prompt_default "WireGuard 网段前缀" "$WG_PREFIX")"
   VPS_WG_PORT="$(prompt_default "VPS WireGuard 公网 UDP 起始端口" "$VPS_WG_PORT")"
@@ -1147,6 +1217,8 @@ valid_port "$HOME_WG_PORT" || die "家宽机 WireGuard 端口无效"
 if [[ "$FULL_STACK" == "1" ]]; then
   valid_port "$VPS_SS_PORT" || die "VPS SS 端口无效"
   valid_port "$HOME_SS_PORT" || die "家宽机 SS 端口无效"
+  [[ "$REMOTE_SSH_ENABLED" == "0" || "$REMOTE_SSH_ENABLED" == "1" ]] || die "隧道 SSH 开关无效"
+  valid_port "$HOME_SSH_PORT" || die "家宽机 SSH 端口无效"
 fi
 
 select_available_wg_prefix
@@ -1237,6 +1309,11 @@ if [[ "$FULL_STACK" == "1" ]]; then
   if [[ "$PUBLIC_SS_ENABLED" == "1" ]]; then
     echo "  公网 SS：$VPS_ENDPOINT:$VPS_SS_PORT"
   fi
+  if [[ "$REMOTE_SSH_ENABLED" == "1" ]]; then
+    echo "  隧道内 SSH：开启，root@$WG_PREFIX.2:$HOME_SSH_PORT"
+  else
+    echo "  隧道内 SSH：关闭（默认）"
+  fi
   if [[ "$ROLE" == "home" ]]; then
     echo "  家宽服务端：$HOME_BACKEND"
   fi
@@ -1279,6 +1356,7 @@ else
     config_stamp="$(date +%Y%m%d-%H%M%S)"
     cp /etc/config/network "/etc/config/network.before-volwg.$config_stamp"
     cp /etc/config/firewall "/etc/config/firewall.before-volwg.$config_stamp"
+    [[ ! -f /etc/config/dropbear ]] || cp /etc/config/dropbear "/etc/config/dropbear.before-volwg.$config_stamp"
     private_key="$(<"$WG_KEY")"
     uci -q delete "network.$WG_IFACE" || true
     uci -q delete "network.${WG_IFACE}_vps" || true
@@ -1299,11 +1377,48 @@ else
     uci set "firewall.fw_$NODE_ID=zone"
     uci set "firewall.fw_$NODE_ID.name=$WG_IFACE"
     uci add_list "firewall.fw_$NODE_ID.network=$WG_IFACE"
-    uci set "firewall.fw_$NODE_ID.input=ACCEPT"
+    if [[ "$FULL_STACK" == "1" ]]; then
+      uci set "firewall.fw_$NODE_ID.input=REJECT"
+    else
+      uci set "firewall.fw_$NODE_ID.input=ACCEPT"
+    fi
     uci set "firewall.fw_$NODE_ID.output=ACCEPT"
     uci set "firewall.fw_$NODE_ID.forward=REJECT"
+    uci -q delete "firewall.allow_ping_$NODE_ID" || true
+    uci -q delete "firewall.allow_ss_$NODE_ID" || true
+    uci -q delete "firewall.allow_ssh_$NODE_ID" || true
+    uci -q delete "dropbear.volwg_$NODE_ID" || true
+    if [[ "$FULL_STACK" == "1" ]]; then
+      uci set "firewall.allow_ping_$NODE_ID=rule"
+      uci set "firewall.allow_ping_$NODE_ID.name=VolWG-$NODE_ID-ping"
+      uci set "firewall.allow_ping_$NODE_ID.src=$WG_IFACE"
+      uci set "firewall.allow_ping_$NODE_ID.proto=icmp"
+      uci set "firewall.allow_ping_$NODE_ID.target=ACCEPT"
+      uci set "firewall.allow_ss_$NODE_ID=rule"
+      uci set "firewall.allow_ss_$NODE_ID.name=VolWG-$NODE_ID-SS2022"
+      uci set "firewall.allow_ss_$NODE_ID.src=$WG_IFACE"
+      uci set "firewall.allow_ss_$NODE_ID.proto=tcp udp"
+      uci set "firewall.allow_ss_$NODE_ID.dest_port=$HOME_SS_PORT"
+      uci set "firewall.allow_ss_$NODE_ID.target=ACCEPT"
+      if [[ "$REMOTE_SSH_ENABLED" == "1" ]]; then
+        uci set "firewall.allow_ssh_$NODE_ID=rule"
+        uci set "firewall.allow_ssh_$NODE_ID.name=VolWG-$NODE_ID-SSH"
+        uci set "firewall.allow_ssh_$NODE_ID.src=$WG_IFACE"
+        uci set "firewall.allow_ssh_$NODE_ID.proto=tcp"
+        uci set "firewall.allow_ssh_$NODE_ID.dest_port=$HOME_SSH_PORT"
+        uci set "firewall.allow_ssh_$NODE_ID.target=ACCEPT"
+        if ! { ss -lnt 2>/dev/null || netstat -lnt 2>/dev/null || true; } | grep -Eq "[:.]${HOME_SSH_PORT}[[:space:]]"; then
+          uci set "dropbear.volwg_$NODE_ID=dropbear"
+          uci set "dropbear.volwg_$NODE_ID.Interface=$WG_IFACE"
+          uci set "dropbear.volwg_$NODE_ID.Port=$HOME_SSH_PORT"
+          uci set "dropbear.volwg_$NODE_ID.PasswordAuth=on"
+          uci set "dropbear.volwg_$NODE_ID.RootPasswordAuth=on"
+        fi
+      fi
+    fi
     uci commit network
     uci commit firewall
+    command -v dropbear >/dev/null 2>&1 && uci commit dropbear || true
     if [[ "$wg_was_installed" == "0" && "$FULL_STACK" == "1" ]]; then
       echo "WireGuard 刚安装，正在重载家宽机本地网络。"
       /etc/init.d/network restart
@@ -1317,6 +1432,9 @@ else
       sleep 2
       ifup "$WG_IFACE"
       /etc/init.d/firewall reload >/dev/null 2>&1 || /etc/init.d/firewall restart
+    fi
+    if [[ "$FULL_STACK" == "1" && "$REMOTE_SSH_ENABLED" == "1" && -x /etc/init.d/dropbear ]]; then
+      /etc/init.d/dropbear restart
     fi
   else
     if [[ -f "$WG_CONFIG" ]]; then
@@ -1388,6 +1506,12 @@ if [[ "$FULL_STACK" == "1" ]]; then
     fi
   else
     echo "VPS 只运行 WireGuard + nftables；SS2022 服务端位于家宽机。"
+  fi
+  if [[ "$REMOTE_SSH_ENABLED" == "1" ]]; then
+    echo "隧道内 SSH 已开启：volwg ssh $NODE_ID"
+    echo "直接连接：ssh -p $HOME_SSH_PORT root@$WG_PREFIX.2"
+  else
+    echo "隧道内 SSH：关闭（默认）"
   fi
 else
   echo "本模式未安装 SS 服务；需要 SS2022 请使用完整部署入口。"

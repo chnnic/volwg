@@ -118,8 +118,13 @@ if [[ "$SYSTEM_KIND" == "openwrt" ]]; then
   uci -q delete "network.${WG_IFACE}_vps" || true
   uci -q delete "network.$WG_IFACE" || true
   uci -q delete "firewall.fw_$NODE_ID" || true
+  uci -q delete "firewall.allow_ping_$NODE_ID" || true
+  uci -q delete "firewall.allow_ss_$NODE_ID" || true
+  uci -q delete "firewall.allow_ssh_$NODE_ID" || true
+  uci -q delete "dropbear.volwg_$NODE_ID" || true
   uci commit network
   uci commit firewall
+  uci commit dropbear 2>/dev/null || true
   archive_item "/etc/init.d/$SS_RUST_SERVICE"
   archive_item "/etc/init.d/$XRAY_SERVICE"
   archive_item "/etc/wireguard/$WG_IFACE.conf"
@@ -130,6 +135,7 @@ if [[ "$SYSTEM_KIND" == "openwrt" ]]; then
   archive_item "$MANUAL_STATE"
   /etc/init.d/network reload >/dev/null 2>&1 || true
   /etc/init.d/firewall reload >/dev/null 2>&1 || /etc/init.d/firewall restart >/dev/null 2>&1 || true
+  /etc/init.d/dropbear reload >/dev/null 2>&1 || true
 else
   if [[ "$ROLE" == "vps" ]]; then
     stop_systemd_service "$NFT_SERVICE"

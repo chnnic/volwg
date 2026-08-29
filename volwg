@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 REPO_RAW_URL="https://raw.githubusercontent.com/chnnic/volwg/main"
-BUILTIN_VERSION="1.4.14"
+BUILTIN_VERSION="1.4.15"
 
 find_lib_dir() {
   local launcher_dir user_data_dir
@@ -262,16 +262,20 @@ management_menu() {
     echo "  1) 打开本机线路管理"
     echo "  2) 快速查看全部 SS 链接"
     echo "  3) 快速查看线路状态"
-    echo "  4) 连接远程 VPS 管理"
-    echo "  5) 按序号删除本机线路"
+    echo "  4) 诊断指定线路"
+    echo "  5) 通过 WireGuard 进入家宽机 SSH"
+    echo "  6) 连接远程 VPS 管理"
+    echo "  7) 按序号删除本机线路"
     echo "  0) 返回主菜单    q) 退出"
-    read -r -p "请选择 [0-5/q]：" choice
+    read -r -p "请选择 [0-7/q]：" choice
     case "$choice" in
       1) bash "$LIB_DIR/wg-home-manager.sh" menu ;;
       2) clear_screen; bash "$LIB_DIR/wg-home-manager.sh" links; pause_screen ;;
       3) clear_screen; bash "$LIB_DIR/wg-home-manager.sh" status; pause_screen ;;
-      4) remote_manager; pause_screen ;;
-      5) bash "$LIB_DIR/wg-home-manager.sh" delete-menu; pause_screen ;;
+      4) bash "$LIB_DIR/wg-home-manager.sh" diagnose-menu; pause_screen ;;
+      5) bash "$LIB_DIR/wg-home-manager.sh" ssh-menu; pause_screen ;;
+      6) remote_manager; pause_screen ;;
+      7) bash "$LIB_DIR/wg-home-manager.sh" delete-menu; pause_screen ;;
       0) return ;;
       q|Q) clear_screen; exit 0 ;;
       *) echo "选择无效。"; pause_screen ;;
@@ -311,6 +315,8 @@ VolWG 命令：
   volwg deploy [参数]      控制端远程部署；要求能 SSH 到两端
   volwg manager            打开本机线路管理界面
   volwg manager links      查看本机保存的全部 SS 链接
+  volwg diagnose ID        诊断指定线路的 WG、SS、转发和 SSH
+  volwg ssh ID             从 VPS 通过 WireGuard 进入家宽机 SSH
   volwg key [参数]         仅 WireGuard：双 SSH 窗口公钥向导
   volwg remove --node ID   删除本机指定线路并归档配置
   volwg purge              清空本机全部 VolWG 线路和旧记录（保留程序）
@@ -351,6 +357,8 @@ case "$subcommand" in
     fi
     exec bash "$LIB_DIR/wg-home-manager.sh" "$@"
     ;;
+  diagnose) shift; exec bash "$LIB_DIR/wg-home-manager.sh" diagnose "$@" ;;
+  ssh) shift; exec bash "$LIB_DIR/wg-home-manager.sh" ssh "$@" ;;
   key) shift; exec bash "$LIB_DIR/wg-home-key-wizard.sh" "$@" ;;
   pair) shift; exec bash "$LIB_DIR/wg-home-key-wizard.sh" --full "$@" ;;
   remove|delete) shift; exec bash "$LIB_DIR/wg-home-remove.sh" "$@" ;;

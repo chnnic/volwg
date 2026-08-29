@@ -65,6 +65,22 @@ Debian LXC 可以作为家宽端或中转端使用，但容器必须拥有 `NET_
 
 Debian 11 安装 ss-rust 时使用 musl 静态构建，不依赖较新的 glibc。脚本在替换程序和创建服务前会先运行 `ssserver --version` 自检；检测到旧二进制无法运行时会自动替换。
 
+## 隧道内 SSH（默认关闭）
+
+完整部署会询问是否允许 VPS 通过该线路的 WireGuard 私网进入家宽机 SSH，默认选择“关闭”。开启时需要填写家宽机实际监听的 SSH 端口；这里填写设备内部端口，不是 FRP 映射后的外部端口。
+
+开启后登录 VPS，可以直接从 VolWG 菜单选择线路进入家宽机：
+
+    volwg
+    线路管理 → 通过 WireGuard 进入家宽机 SSH
+
+也可以使用命令：
+
+    volwg ssh 节点ID
+    volwg diagnose 节点ID
+
+连接目标是该线路的 WireGuard 私网地址，例如 `10.88.1.2`，因此不需要家宽公网 IP、FRP 或额外公网 SSH 端口。VolWG 只开放该 WireGuard 接口上的指定 SSH 端口；其他来源仍由家宽机原有防火墙控制。WireGuard 负责安全传输，SSH 登录仍使用家宽机自己的密码或 `authorized_keys`。
+
 ## 家宽服务端选择
 
 全自动向导会询问家宽机的 SS2022 服务端后端：

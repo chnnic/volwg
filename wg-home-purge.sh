@@ -136,6 +136,10 @@ for node_id in "${NODE_IDS[@]}"; do
     uci -q delete "network.${iface}_vps" || true
     uci -q delete "network.$iface" || true
     uci -q delete "firewall.fw_$node_id" || true
+    uci -q delete "firewall.allow_ping_$node_id" || true
+    uci -q delete "firewall.allow_ss_$node_id" || true
+    uci -q delete "firewall.allow_ssh_$node_id" || true
+    uci -q delete "dropbear.volwg_$node_id" || true
   else
     stop_systemd "wg-quick@$iface.service"
     stop_systemd "wgh-nft-$node_id.service"
@@ -168,8 +172,10 @@ if [[ "$SYSTEM_KIND" == "openwrt" ]]; then
   uci -q delete firewall.fw_wg_home || true
   uci commit network
   uci commit firewall
+  uci commit dropbear 2>/dev/null || true
   /etc/init.d/network reload >/dev/null 2>&1 || true
   /etc/init.d/firewall reload >/dev/null 2>&1 || /etc/init.d/firewall restart >/dev/null 2>&1 || true
+  /etc/init.d/dropbear reload >/dev/null 2>&1 || true
   for legacy_init in /etc/init.d/xray-wg-home /etc/init.d/ssrust-wg-home; do
     if [[ -x "$legacy_init" ]]; then
       "$legacy_init" stop >/dev/null 2>&1 || true

@@ -54,6 +54,8 @@ usage() {
   volwg manager links            查看所有线路的 SS 链接
   volwg manager show 节点ID      查看单条线路详情
   volwg manager status           查看 WireGuard 握手状态
+  volwg manager diagnose ID      诊断 WG、SS、转发与家宽 SSH
+  volwg manager ssh ID           通过 WireGuard 进入家宽机 SSH
   volwg manager node ID [格式]   生成图形化 Xray 可导入节点
   volwg manager rename ID 名称   修改线路名称和 SS 链接备注
   volwg manager delete ID        删除 VPS 端指定线路并归档配置
@@ -446,7 +448,7 @@ list_links() {
 }
 
 show_node() {
-  local file="$1" id name mode backend iface vps_wg_port home_wg_port prefix vps_ss_port home_ss_port public_endpoint private_endpoint public_link private_link public_outbound private_outbound
+  local file="$1" id name mode backend iface vps_wg_port home_wg_port prefix vps_ss_port home_ss_port remote_ssh ssh_port public_endpoint private_endpoint public_link private_link public_outbound private_outbound
   id="$(field "$file" NODE_ID)"
   name="$(decode "$(field "$file" DISPLAY_NAME_B64)")"
   mode="$(field "$file" MODE)"
@@ -458,6 +460,8 @@ show_node() {
   prefix="$(field "$file" WG_PREFIX)"
   vps_ss_port="$(field_fallback "$file" VPS_SS_PORT SS_PORT)"
   home_ss_port="$(field_fallback "$file" HOME_SS_PORT SS_PORT)"
+  remote_ssh="$(field "$file" REMOTE_SSH_ENABLED)"
+  ssh_port="$(field "$file" HOME_SSH_PORT)"
   public_endpoint="$(public_ss_endpoint "$file")"
   private_endpoint="$(private_ss_endpoint "$file")"
   public_link="$(public_ss_link "$file")"
@@ -473,6 +477,11 @@ show_node() {
   echo "  VPS 公网 UDP：${vps_wg_port:-未记录}"
   echo "  家宽机本地 UDP：${home_wg_port:-未记录}"
   echo "SS 端口：VPS ${vps_ss_port:-未记录}，家宽机 ${home_ss_port:-未记录}"
+  if [[ "$remote_ssh" == "1" ]]; then
+    echo "隧道内 SSH：开启，root@${prefix}.2:${ssh_port:-22}（volwg ssh $id）"
+  else
+    echo "隧道内 SSH：关闭"
+  fi
   echo "状态：$(node_status "$iface")"
   if [[ -n "$public_link" ]]; then
     echo "公网 SS 地址：${public_endpoint:-未记录}"
@@ -568,6 +577,135 @@ show_status() {
   if ((found == 0)) && [[ -f /etc/wireguard/wg-home.conf ]]; then
     printf '%-10s %-24.24s %s\n' "legacy" "旧版未登记线路" "$(node_status wg-home)"
   fi
+}
+
+tcp_probe() {
+  local host="$1" port="$2"
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 3 bash -c "exec 3<>/dev/tcp/$host/$port" >/dev/null 2>&1
+  elif command -v nc >/dev/null 2>&1; then
+    nc -z -w 3 "$host" "$port" >/dev/null 2>&1
+  else
+    return 2
+  fi
+}
+
+diagnose_node() {
+  local file="$1" ssh_port="${2:-}" id name iface prefix home_ip home_ss_port vps_ss_port
+  local public_enabled handshake now age failures=0 nft_service
+  id="$(field "$file" NODE_ID)"
+  name="$(decode "$(field "$file" DISPLAY_NAME_B64)")"
+  iface="$(field "$file" WG_INTERFACE)"
+  prefix="$(field "$file" WG_PREFIX)"
+  home_ss_port="$(field_fallback "$file" HOME_SS_PORT SS_PORT)"
+  vps_ss_port="$(field_fallback "$file" VPS_SS_PORT SS_PORT)"
+  public_enabled="$(public_ss_enabled "$file")"
+  ssh_port="${ssh_port:-$(field "$file" HOME_SSH_PORT)}"
+  ssh_port="${ssh_port:-22}"
+  [[ "$prefix" =~ ^([0-9]{1,3}\.){2}[0-9]{1,3}$ ]] || die "线路缺少有效 WireGuard 网段"
+  [[ "$home_ss_port" =~ ^[0-9]+$ ]] || die "线路缺少有效家宽 SS 端口"
+  if ! [[ "$ssh_port" =~ ^[0-9]+$ ]] || ((ssh_port < 1 || ssh_port > 65535)); then
+    die "家宽 SSH 端口无效"
+  fi
+  home_ip="$prefix.2"
+  nft_service="wgh-nft-$id.service"
+
+  echo "线路：$name ($id)"
+  echo "目标：$home_ip"
+  echo
+  if ip link show "$iface" >/dev/null 2>&1; then
+    echo "[通过] WireGuard 接口：$iface"
+  else
+    echo "[失败] WireGuard 接口不存在：$iface"
+    ((failures++)) || true
+  fi
+  handshake="$(wg show "$iface" latest-handshakes 2>/dev/null | awk 'NR==1 {print $2}')"
+  if [[ "$handshake" =~ ^[0-9]+$ && "$handshake" != "0" ]]; then
+    now="$(date +%s)"
+    age=$((now - handshake))
+    if ((age <= 180)); then
+      echo "[通过] WireGuard 握手：${age} 秒前"
+    else
+      echo "[失败] WireGuard 握手已过期：${age} 秒前"
+      ((failures++)) || true
+    fi
+  else
+    echo "[失败] WireGuard 尚未握手"
+    ((failures++)) || true
+  fi
+  if ping -c 1 -W 2 "$home_ip" >/dev/null 2>&1; then
+    echo "[通过] 隧道 Ping：$home_ip"
+  else
+    echo "[失败] 隧道 Ping：$home_ip"
+    ((failures++)) || true
+  fi
+  if tcp_probe "$home_ip" "$home_ss_port"; then
+    echo "[通过] 家宽 SS TCP：$home_ip:$home_ss_port"
+  else
+    echo "[失败] 家宽 SS TCP：$home_ip:$home_ss_port（检查 ss-rust/Xray 服务）"
+    ((failures++)) || true
+  fi
+  if [[ "$public_enabled" == "1" ]]; then
+    if command -v systemctl >/dev/null 2>&1 \
+      && systemctl is-active --quiet "$nft_service" \
+      && nft list table ip "$iface" 2>/dev/null | grep -q "dport $vps_ss_port"; then
+      echo "[通过] VPS 公网转发：$vps_ss_port/TCP+UDP"
+    else
+      echo "[失败] VPS 公网转发规则或服务异常：$vps_ss_port"
+      ((failures++)) || true
+    fi
+  else
+    echo "[提示] 本线路未开启公网 SS 转发"
+  fi
+  if tcp_probe "$home_ip" "$ssh_port"; then
+    echo "[通过] 家宽 SSH：$home_ip:$ssh_port"
+    echo "       连接命令：ssh -p $ssh_port root@$home_ip"
+  else
+    echo "[提示] 家宽 SSH 未开放：$home_ip:$ssh_port"
+    echo "       若安装时开启了隧道内 SSH，请确认填写的是家宽实际 SSH 端口。"
+  fi
+  echo
+  if ((failures == 0)); then
+    echo "诊断结果：核心链路正常。"
+  else
+    echo "诊断结果：发现 $failures 项核心异常。"
+    return 1
+  fi
+}
+
+interactive_diagnose() {
+  local file ssh_port saved_port
+  choose_node || return 0
+  file="$(node_file "$SELECTED_NODE")"
+  saved_port="$(field "$file" HOME_SSH_PORT)"
+  read -r -p "家宽 SSH 端口 [${saved_port:-22}]：" ssh_port
+  clear_screen
+  manager_header "线路诊断 · $SELECTED_NODE"
+  diagnose_node "$file" "${ssh_port:-${saved_port:-22}}" || true
+}
+
+ssh_to_home() {
+  local file="$1" ssh_port="${2:-}" id prefix home_ip enabled
+  id="$(field "$file" NODE_ID)"
+  prefix="$(field "$file" WG_PREFIX)"
+  enabled="$(field "$file" REMOTE_SSH_ENABLED)"
+  ssh_port="${ssh_port:-$(field "$file" HOME_SSH_PORT)}"
+  ssh_port="${ssh_port:-22}"
+  home_ip="$prefix.2"
+  [[ "$enabled" == "1" ]] || die "该线路未登记开启隧道内 SSH；可先运行 volwg diagnose $id $ssh_port 检查"
+  tcp_probe "$home_ip" "$ssh_port" || die "无法连接家宽 SSH：$home_ip:$ssh_port"
+  echo "正在通过 WireGuard 进入 $id：root@$home_ip:$ssh_port"
+  echo "退出家宽 SSH 后会返回 SG/VPS 的 VolWG 菜单。"
+  ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -p "$ssh_port" "root@$home_ip"
+}
+
+interactive_ssh() {
+  local file ssh_port saved_port
+  choose_node || return 0
+  file="$(node_file "$SELECTED_NODE")"
+  saved_port="$(field "$file" HOME_SSH_PORT)"
+  read -r -p "家宽 SSH 端口 [${saved_port:-22}]：" ssh_port
+  ssh_to_home "$file" "${ssh_port:-${saved_port:-22}}"
 }
 
 rename_node() {
@@ -721,12 +859,14 @@ menu() {
     echo "  2) 查看线路概览与状态"
     echo "  3) 导出 SS / Xray 图形化节点"
     echo "  4) 查看单条线路详细配置"
-    echo "  5) 查看 WireGuard 握手状态"
-    echo "  6) 修改线路/链接名称"
-    echo "  7) 删除线路（停止服务并归档）"
-    echo "  8) 登记旧版或手工线路"
+    echo "  5) 诊断线路（WG / SS / 转发 / SSH）"
+    echo "  6) 通过 WireGuard 进入家宽机 SSH"
+    echo "  7) 查看 WireGuard 握手状态"
+    echo "  8) 修改线路/链接名称"
+    echo "  9) 删除线路（停止服务并归档）"
+    echo " 10) 登记旧版或手工线路"
     echo "  0) 返回上级菜单    q) 退出"
-    read -r -p "请选择 [0-8/q]：" choice
+    read -r -p "请选择 [0-10/q]：" choice
     echo
     case "$choice" in
       1) clear_screen; manager_header "全部 SS 链接"; list_links; pause_screen ;;
@@ -756,8 +896,10 @@ menu() {
         show_node "$(node_file "$SELECTED_NODE")"
         pause_screen
         ;;
-      5) clear_screen; manager_header "WireGuard 状态"; show_status; pause_screen ;;
-      6)
+      5) interactive_diagnose; pause_screen ;;
+      6) interactive_ssh; pause_screen ;;
+      7) clear_screen; manager_header "WireGuard 状态"; show_status; pause_screen ;;
+      8)
         choose_node || continue
         clear_screen
         manager_header "修改线路名称 · $SELECTED_NODE"
@@ -766,8 +908,8 @@ menu() {
         rename_node "$(node_file "$SELECTED_NODE")" "$new_name"
         pause_screen
         ;;
-      7) interactive_delete; pause_screen ;;
-      8) clear_screen; manager_header "登记已有线路"; register_node; pause_screen ;;
+      9) interactive_delete; pause_screen ;;
+      10) clear_screen; manager_header "登记已有线路"; register_node; pause_screen ;;
       0) return ;;
       q|Q) clear_screen; exit 0 ;;
       *) echo "选择无效。"; pause_screen ;;
@@ -782,6 +924,10 @@ case "$command_name" in
   links) list_links ;;
   show) [[ -n "${2:-}" ]] || die "请提供节点 ID"; show_node "$(node_file "$2")" ;;
   status) show_status ;;
+  diagnose) [[ -n "${2:-}" ]] || die "用法：volwg manager diagnose ID [SSH端口]"; diagnose_node "$(node_file "$2")" "${3:-}" ;;
+  diagnose-menu) interactive_diagnose ;;
+  ssh) [[ -n "${2:-}" ]] || die "用法：volwg manager ssh ID [SSH端口]"; ssh_to_home "$(node_file "$2")" "${3:-}" ;;
+  ssh-menu) interactive_ssh ;;
   node|export) [[ -n "${2:-}" ]] || die "用法：volwg manager node ID [ss|xray|routing|all]"; export_node "$(node_file "$2")" "${3:-all}" ;;
   rename) [[ -n "${2:-}" && -n "${3:-}" ]] || die "用法：volwg manager rename ID 新名称"; rename_node "$(node_file "$2")" "$3" ;;
   delete|remove) [[ -n "${2:-}" ]] || die "用法：volwg manager delete ID"; delete_node "$(removable_file "$2")" ;;

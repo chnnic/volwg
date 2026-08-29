@@ -15,6 +15,11 @@ printf '%s\n' \
   'MODE=relay' \
   'HOME_BACKEND=ss-rust' \
   'WG_INTERFACE=wgh_line1' \
+  'WG_PREFIX=10.88.1' \
+  'HOME_SS_PORT=31000' \
+  'VPS_SS_PORT=31000' \
+  'REMOTE_SSH_ENABLED=1' \
+  'HOME_SSH_PORT=2222' \
   'SS_ENDPOINT=198.51.100.10:31000' \
   >"$TEST_DIR/nodes/line1.conf"
 
@@ -63,7 +68,7 @@ grep -Fq 'openssl base64 -d -A' "$ROOT_DIR/wg-home-key-wizard.sh"
 grep -Fq 'openssl base64 -d -A' "$ROOT_DIR/wg-home-manager.sh"
 grep -Fq 'VOLWG1.' "$ROOT_DIR/wg-home-key-wizard.sh"
 grep -Fq '/etc/wireguard/*.conf' "$ROOT_DIR/wg-home-key-wizard.sh"
-grep -Fq 'ssserver --version' "$ROOT_DIR/wg-home-key-wizard.sh"
+grep -Fq 'find_working_ssserver' "$ROOT_DIR/wg-home-key-wizard.sh"
 if grep -Fq 'unknown-linux-gnu' "$ROOT_DIR/wg-home-key-wizard.sh" "$ROOT_DIR/wg-home-deploy.sh"; then
   exit 1
 fi
@@ -78,8 +83,15 @@ grep -Fq '家宽机 SSH 私钥路径' "$ROOT_DIR/wg-home-deploy.sh"
 grep -Fq '输入序号或节点 ID' "$ROOT_DIR/wg-home-manager.sh"
 grep -Fq 'delete-menu|remove-menu' "$ROOT_DIR/wg-home-manager.sh"
 grep -Fq '按序号删除本机线路' "$ROOT_DIR/volwg"
-grep -Fq 'BUILTIN_VERSION="1.4.14"' "$ROOT_DIR/volwg"
-grep -Fxq '1.4.14' "$ROOT_DIR/VERSION"
+grep -Fq 'volwg diagnose ID' "$ROOT_DIR/volwg"
+grep -Fq 'volwg ssh ID' "$ROOT_DIR/volwg"
+grep -Fq '通过 WireGuard 进入家宽机 SSH' "$ROOT_DIR/wg-home-manager.sh"
+grep -Fq -- '--remote-ssh on|off' < <(bash "$ROOT_DIR/wg-home-key-wizard.sh" --help)
+grep -Fq 'REMOTE_SSH_ENABLED=$REMOTE_SSH_ENABLED' "$ROOT_DIR/wg-home-key-wizard.sh"
+grep -Fq '/usr/bin/ssserver /usr/local/bin/ssserver' "$ROOT_DIR/wg-home-key-wizard.sh"
+grep -Fq '/usr/bin/ssserver /usr/local/bin/ssserver' "$ROOT_DIR/wg-home-deploy.sh"
+grep -Fq 'BUILTIN_VERSION="1.4.15"' "$ROOT_DIR/volwg"
+grep -Fxq '1.4.15' "$ROOT_DIR/VERSION"
 
 menu_output="$(printf '2\n2\n0\n0\n0\n' | "$ROOT_DIR/volwg")"
 grep -Fq '此模式只会' <<<"$menu_output"
@@ -108,8 +120,8 @@ pair_functions="$(awk '/^while \(\(\$#\)\); do/{exit} {print}' "$ROOT_DIR/wg-hom
   [[ "$(printf Hello | base64_encode_stream)" == "SGVsbG8=" ]]
   VOLWG_FORCE_OPENSSL_BASE64="0"
   NODE_ID=""
-  prompt_node_id "home1" <<< $'IDN-E87N\n\n' 2>/dev/null
-  [[ "$NODE_ID" == "idn_e87n" ]]
+  prompt_node_id "home1" <<< $'LINE-ABC\n\n' 2>/dev/null
+  [[ "$NODE_ID" == "line_abc" ]]
   port_in_use() {
     [[ "$1" == "51830" || "$1" == "31000" ]]
   }
@@ -134,13 +146,15 @@ pair_functions="$(awk '/^while \(\(\$#\)\); do/{exit} {print}' "$ROOT_DIR/wg-hom
   HOME_BACKEND="ss-rust"
   MODE="relay"
   PUBLIC_SS_ENABLED="1"
+  REMOTE_SSH_ENABLED="1"
+  HOME_SSH_PORT="2222"
   SS_PASSWORD="AAAAAAAAAAAAAAAAAAAAAA=="
   local_public_key="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
   [[ -n "$local_public_key" ]]
   pair_code="$(make_pair_code)"
   NODE_ID="" DISPLAY_NAME="" WG_PREFIX="" VPS_ENDPOINT=""
   VPS_WG_PORT="" HOME_WG_PORT="" VPS_SS_PORT="" HOME_SS_PORT=""
-  HOME_BACKEND="" MODE="" PUBLIC_SS_ENABLED="" SS_PASSWORD="" PAIR_PEER_PUBLIC_KEY=""
+  HOME_BACKEND="" MODE="" PUBLIC_SS_ENABLED="" REMOTE_SSH_ENABLED="" HOME_SSH_PORT="" SS_PASSWORD="" PAIR_PEER_PUBLIC_KEY=""
   load_pair_code "$pair_code"
   [[ "$PAIR_CODE_LOADED" == "1" ]]
   [[ "$NODE_ID" == "test1" && "$DISPLAY_NAME" == "测试线路" ]]
@@ -148,6 +162,7 @@ pair_functions="$(awk '/^while \(\(\$#\)\); do/{exit} {print}' "$ROOT_DIR/wg-hom
   [[ "$VPS_WG_PORT" == "52001" && "$HOME_SS_PORT" == "32002" ]]
   [[ "$HOME_WG_PORT" == "52002" && "$VPS_SS_PORT" == "32001" ]]
   [[ "$HOME_BACKEND" == "ss-rust" && "$MODE" == "relay" && "$PUBLIC_SS_ENABLED" == "1" ]]
+  [[ "$REMOTE_SSH_ENABLED" == "1" && "$HOME_SSH_PORT" == "2222" ]]
   [[ "$SS_PASSWORD" == "AAAAAAAAAAAAAAAAAAAAAA==" ]]
   [[ "$PAIR_PEER_PUBLIC_KEY" == "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" ]]
 )
