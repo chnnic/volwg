@@ -171,11 +171,25 @@ apply_route_once() {
   else
     ip -4 route replace "$endpoint_ip/32" dev "$device" metric "$metric"
   fi
+  # 多 WAN 切换后仅替换主机路由不够：WireGuard 的 UDP socket 和上游 NAT
+  # 可能继续保留旧出口状态，表现为 endpoint 看似正确但隧道大量丢包。
+  # 重建单条 VolWG 接口以刷新 socket/握手；不重启 network，也不影响其他节点。
+  if [[ "$(uci -q get "network.$WG_IFACE.proto" 2>/dev/null || true)" == "wireguard" ]]; then
+    ifdown "$WG_IFACE" >/dev/null 2>&1 || true
+    sleep 1
+    ifup "$WG_IFACE" >/dev/null 2>&1 || true
+    sleep 1
+    if [[ -n "$gateway" ]]; then
+      ip -4 route replace "$endpoint_ip/32" via "$gateway" dev "$device" metric "$metric"
+    else
+      ip -4 route replace "$endpoint_ip/32" dev "$device" metric "$metric"
+    fi
+  fi
   peer="$(wg show "$WG_IFACE" peers 2>/dev/null | head -n 1)"
   if [[ -n "$peer" ]]; then
     wg set "$WG_IFACE" peer "$peer" endpoint "$endpoint_ip:$endpoint_port" >/dev/null 2>&1 || true
   fi
-  logger -t volwg-wan-follow "线路 $NODE_ID 的 WireGuard endpoint 已切换到 $device${gateway:+ via $gateway}"
+  logger -t volwg-wan-follow "线路 $NODE_ID 的 WireGuard endpoint 已切换到 $device${gateway:+ via $gateway}，接口会话已刷新"
 }
 
 write_config() {

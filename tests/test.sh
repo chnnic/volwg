@@ -106,12 +106,14 @@ if grep -Fq 'tcp_probe "$home_ip"' <<<"$ssh_function"; then
 fi
 grep -Fq '0\\.0\\.0\\.0|$WG_PREFIX\\.2|\\*|::' "$ROOT_DIR/wg-home-key-wizard.sh"
 grep -Fq 'dropbear.volwg_$NODE_ID.PasswordAuth=off' "$ROOT_DIR/wg-home-key-wizard.sh"
-grep -Fq 'BUILTIN_VERSION="1.4.20"' "$ROOT_DIR/volwg"
-grep -Fxq '1.4.20' "$ROOT_DIR/VERSION"
+grep -Fq 'BUILTIN_VERSION="1.4.21"' "$ROOT_DIR/volwg"
+grep -Fxq '1.4.21' "$ROOT_DIR/VERSION"
 grep -Fq '自动让 WireGuard endpoint 跟随当前优先级最高' < <(bash "$ROOT_DIR/wg-home-wan-follow.sh" --help)
 grep -Fq 'interface_has_carrier' "$ROOT_DIR/wg-home-wan-follow.sh"
 grep -Fq 'ip -4 route replace "$endpoint_ip/32"' "$ROOT_DIR/wg-home-wan-follow.sh"
 grep -Fq 'wg set "$WG_IFACE" peer "$peer" endpoint' "$ROOT_DIR/wg-home-wan-follow.sh"
+grep -Fq 'ifdown "$WG_IFACE"' "$ROOT_DIR/wg-home-wan-follow.sh"
+grep -Fq 'ifup "$WG_IFACE"' "$ROOT_DIR/wg-home-wan-follow.sh"
 grep -Fq 'wg-home-wan-follow.sh" enable' "$ROOT_DIR/wg-home-key-wizard.sh"
 grep -Fq 'wgh-wan-$NODE_ID' "$ROOT_DIR/wg-home-remove.sh"
 

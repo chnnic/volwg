@@ -67,7 +67,7 @@ Debian 11 安装 ss-rust 时使用 musl 静态构建，不依赖较新的 glibc�
 
 ## OpenWrt 双 WAN/5G 自动切换
 
-OpenWrt/ImmortalWrt 家宽机部署线路时，会自动为每条线路开启 WireGuard endpoint 的 WAN 跟随服务。它按系统默认路由的 metric 选择当前优先级最高且物理链路在线的出口：网线 WAN 可用时走网线，网线断开后切到 5G/备用 WAN，网线恢复后再自动切回。普通上网已经切换出口、但 WireGuard 仍停留在安装时旧出口的问题也会被自动纠正。
+OpenWrt/ImmortalWrt 家宽机部署线路时，会自动为每条线路开启 WireGuard endpoint 的 WAN 跟随服务。它按系统默认路由的 metric 选择当前优先级最高且物理链路在线的出口：网线 WAN 可用时走网线，网线断开后切到 5G/备用 WAN，网线恢复后再自动切回。普通上网已经切换出口、但 WireGuard 仍停留在安装时旧出口的问题也会被自动纠正。每次出口变化时只重建对应节点的 WireGuard 接口，刷新旧 UDP socket、NAT 映射与握手，避免路由已经切换但隧道仍大量丢包；不会重启整个 OpenWrt 网络或影响其他节点。
 
 查看指定线路当前使用的出口：
 
