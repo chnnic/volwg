@@ -44,6 +44,7 @@ grep -Fq '自动向后寻找可用端口' < <(bash "$ROOT_DIR/wg-home-key-wizard
 grep -Fq 'volwg remove --node' < <(bash "$ROOT_DIR/wg-home-remove.sh" --help)
 grep -Fq 'wg-home-remove.sh' "$ROOT_DIR/install.sh"
 grep -Fq 'wg-home-purge.sh' "$ROOT_DIR/install.sh"
+grep -Fq 'wg-home-wan-follow.sh' "$ROOT_DIR/install.sh"
 grep -Fq 'atomic_install "$TMP_DIR/volwg" "$INSTALL_BIN_DIR/volwg" 755' "$ROOT_DIR/install.sh"
 grep -Fq '不处理 wg-id' < <(bash "$ROOT_DIR/wg-home-purge.sh" --help)
 grep -Fq 'volwg purge' "$ROOT_DIR/volwg"
@@ -86,6 +87,8 @@ grep -Fq 'delete-menu|remove-menu' "$ROOT_DIR/wg-home-manager.sh"
 grep -Fq '按序号删除本机线路' "$ROOT_DIR/volwg"
 grep -Fq 'volwg diagnose ID' "$ROOT_DIR/volwg"
 grep -Fq 'volwg ssh ID' "$ROOT_DIR/volwg"
+grep -Fq 'volwg wan-follow enable --node ID' "$ROOT_DIR/volwg"
+grep -Fq 'wan-follow) shift; exec bash "$LIB_DIR/wg-home-wan-follow.sh"' "$ROOT_DIR/volwg"
 grep -Fq '通过 WireGuard 进入家宽机 SSH' "$ROOT_DIR/wg-home-manager.sh"
 grep -Fq -- '--remote-ssh on|off' < <(bash "$ROOT_DIR/wg-home-key-wizard.sh" --help)
 grep -Fq -- '--remote-ssh-auth TYPE' < <(bash "$ROOT_DIR/wg-home-key-wizard.sh" --help)
@@ -103,8 +106,14 @@ if grep -Fq 'tcp_probe "$home_ip"' <<<"$ssh_function"; then
 fi
 grep -Fq '0\\.0\\.0\\.0|$WG_PREFIX\\.2|\\*|::' "$ROOT_DIR/wg-home-key-wizard.sh"
 grep -Fq 'dropbear.volwg_$NODE_ID.PasswordAuth=off' "$ROOT_DIR/wg-home-key-wizard.sh"
-grep -Fq 'BUILTIN_VERSION="1.4.19"' "$ROOT_DIR/volwg"
-grep -Fxq '1.4.19' "$ROOT_DIR/VERSION"
+grep -Fq 'BUILTIN_VERSION="1.4.20"' "$ROOT_DIR/volwg"
+grep -Fxq '1.4.20' "$ROOT_DIR/VERSION"
+grep -Fq '自动让 WireGuard endpoint 跟随当前优先级最高' < <(bash "$ROOT_DIR/wg-home-wan-follow.sh" --help)
+grep -Fq 'interface_has_carrier' "$ROOT_DIR/wg-home-wan-follow.sh"
+grep -Fq 'ip -4 route replace "$endpoint_ip/32"' "$ROOT_DIR/wg-home-wan-follow.sh"
+grep -Fq 'wg set "$WG_IFACE" peer "$peer" endpoint' "$ROOT_DIR/wg-home-wan-follow.sh"
+grep -Fq 'wg-home-wan-follow.sh" enable' "$ROOT_DIR/wg-home-key-wizard.sh"
+grep -Fq 'wgh-wan-$NODE_ID' "$ROOT_DIR/wg-home-remove.sh"
 
 menu_output="$(printf '2\n2\n0\n0\n0\n' | "$ROOT_DIR/volwg")"
 grep -Fq '此模式只会' <<<"$menu_output"

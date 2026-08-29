@@ -43,6 +43,7 @@ NFT_SERVICE="wgh-nft-$NODE_ID"
 XRAY_SERVICE="xray-wgh-$NODE_ID"
 SS_RUST_SERVICE="ssrust-wgh-$NODE_ID"
 INPUT_SERVICE="wgh-input-$NODE_ID"
+WAN_FOLLOW_SERVICE="wgh-wan-$NODE_ID"
 MANUAL_STATE="/etc/wg-home-exit/manual/$NODE_ID.conf"
 NODE_STATE="$STATE_DIR/$NODE_ID.conf"
 SYSTEM_KIND="linux"
@@ -108,6 +109,10 @@ stop_systemd_service() {
 }
 
 if [[ "$SYSTEM_KIND" == "openwrt" ]]; then
+  if [[ -x "/etc/init.d/$WAN_FOLLOW_SERVICE" ]]; then
+    "/etc/init.d/$WAN_FOLLOW_SERVICE" stop >/dev/null 2>&1 || true
+    "/etc/init.d/$WAN_FOLLOW_SERVICE" disable >/dev/null 2>&1 || true
+  fi
   for init_script in "/etc/init.d/$SS_RUST_SERVICE" "/etc/init.d/$XRAY_SERVICE"; do
     if [[ -x "$init_script" ]]; then
       "$init_script" stop >/dev/null 2>&1 || true
@@ -127,6 +132,8 @@ if [[ "$SYSTEM_KIND" == "openwrt" ]]; then
   uci commit dropbear 2>/dev/null || true
   archive_item "/etc/init.d/$SS_RUST_SERVICE"
   archive_item "/etc/init.d/$XRAY_SERVICE"
+  archive_item "/etc/init.d/$WAN_FOLLOW_SERVICE"
+  archive_item "/etc/wg-home-exit/wan-follow/$NODE_ID.conf"
   archive_item "/etc/wireguard/$WG_IFACE.conf"
   archive_item "/etc/wireguard/$WG_IFACE.key"
   archive_item "/etc/wireguard/$WG_IFACE.pub"

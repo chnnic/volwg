@@ -125,6 +125,12 @@ echo "正在停止 VolWG 节点服务..."
 for node_id in "${NODE_IDS[@]}"; do
   iface="wgh_$node_id"
   if [[ "$SYSTEM_KIND" == "openwrt" ]]; then
+    if [[ -x "/etc/init.d/wgh-wan-$node_id" ]]; then
+      "/etc/init.d/wgh-wan-$node_id" stop >/dev/null 2>&1 || true
+      "/etc/init.d/wgh-wan-$node_id" disable >/dev/null 2>&1 || true
+    fi
+    archive_item "/etc/init.d/wgh-wan-$node_id"
+    archive_item "/etc/wg-home-exit/wan-follow/$node_id.conf"
     for init_name in "ssrust-wgh-$node_id" "xray-wgh-$node_id"; do
       if [[ -x "/etc/init.d/$init_name" ]]; then
         "/etc/init.d/$init_name" stop >/dev/null 2>&1 || true

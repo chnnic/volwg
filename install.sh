@@ -43,9 +43,10 @@ download "$REPO_RAW_URL/wg-home-key-wizard.sh" "$TMP_DIR/wg-home-key-wizard.sh"
 download "$REPO_RAW_URL/wg-home-manager.sh" "$TMP_DIR/wg-home-manager.sh"
 download "$REPO_RAW_URL/wg-home-remove.sh" "$TMP_DIR/wg-home-remove.sh"
 download "$REPO_RAW_URL/wg-home-purge.sh" "$TMP_DIR/wg-home-purge.sh"
+download "$REPO_RAW_URL/wg-home-wan-follow.sh" "$TMP_DIR/wg-home-wan-follow.sh"
 download "$REPO_RAW_URL/volwg" "$TMP_DIR/volwg"
 download "$REPO_RAW_URL/VERSION" "$TMP_DIR/VERSION"
-chmod 700 "$TMP_DIR/wg-home-deploy.sh" "$TMP_DIR/wg-home-key-wizard.sh" "$TMP_DIR/wg-home-manager.sh" "$TMP_DIR/wg-home-remove.sh" "$TMP_DIR/wg-home-purge.sh"
+chmod 700 "$TMP_DIR/wg-home-deploy.sh" "$TMP_DIR/wg-home-key-wizard.sh" "$TMP_DIR/wg-home-manager.sh" "$TMP_DIR/wg-home-remove.sh" "$TMP_DIR/wg-home-purge.sh" "$TMP_DIR/wg-home-wan-follow.sh"
 chmod 755 "$TMP_DIR/volwg"
 
 if [[ "${VOLWG_TEMPORARY:-0}" == "1" ]]; then
@@ -68,7 +69,7 @@ else
 fi
 
 mkdir -p "$INSTALL_LIB_DIR" "$INSTALL_BIN_DIR"
-for component in wg-home-deploy.sh wg-home-key-wizard.sh wg-home-manager.sh wg-home-remove.sh wg-home-purge.sh; do
+for component in wg-home-deploy.sh wg-home-key-wizard.sh wg-home-manager.sh wg-home-remove.sh wg-home-purge.sh wg-home-wan-follow.sh; do
   atomic_install "$TMP_DIR/$component" "$INSTALL_LIB_DIR/$component" 700
 done
 atomic_install "$TMP_DIR/VERSION" "$INSTALL_LIB_DIR/VERSION" 644

@@ -65,6 +65,25 @@ Debian LXC 可以作为家宽端或中转端使用，但容器必须拥有 `NET_
 
 Debian 11 安装 ss-rust 时使用 musl 静态构建，不依赖较新的 glibc。脚本在替换程序和创建服务前会先运行 `ssserver --version` 自检；检测到旧二进制无法运行时会自动替换。
 
+## OpenWrt 双 WAN/5G 自动切换
+
+OpenWrt/ImmortalWrt 家宽机部署线路时，会自动为每条线路开启 WireGuard endpoint 的 WAN 跟随服务。它按系统默认路由的 metric 选择当前优先级最高且物理链路在线的出口：网线 WAN 可用时走网线，网线断开后切到 5G/备用 WAN，网线恢复后再自动切回。普通上网已经切换出口、但 WireGuard 仍停留在安装时旧出口的问题也会被自动纠正。
+
+查看指定线路当前使用的出口：
+
+    volwg wan-follow status --node line1
+
+为升级前已经创建的 OpenWrt 线路补开此功能：
+
+    volwg update
+    volwg wan-follow enable --node line1
+
+关闭自动跟随但保留配置：
+
+    volwg wan-follow disable --node line1
+
+每条线路拥有独立的 `wgh-wan-节点ID` 服务。删除指定线路或执行 `volwg purge` 时，对应服务与配置会一并停止并归档，不影响其他节点。
+
 ## 隧道内 SSH（默认关闭）
 
 完整部署会询问是否允许 VPS 通过该线路的 WireGuard 私网进入家宽机 SSH，默认选择“关闭”。开启时需要填写家宽机实际监听的 SSH 端口；这里填写设备内部端口，不是 FRP 映射后的外部端口。
@@ -464,6 +483,7 @@ SS2022、SSH 私钥和 WireGuard 私钥均属于敏感信息，不要公开。
 - wg-home-manager.sh：安装到 VPS 的多线路查看和 SS 链接管理后台。
 - wg-home-remove.sh：按节点停止服务并归档删除 VPS/家宽端配置。
 - wg-home-purge.sh：清空本机全部 VolWG 线路、旧版配置和活动记录。
+- wg-home-wan-follow.sh：OpenWrt WireGuard endpoint 的有线 WAN/5G 自动跟随服务。
 
 ## 注意
 

@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 REPO_RAW_URL="https://raw.githubusercontent.com/chnnic/volwg/main"
-BUILTIN_VERSION="1.4.19"
+BUILTIN_VERSION="1.4.20"
 
 find_lib_dir() {
   local launcher_dir user_data_dir
@@ -317,6 +317,10 @@ VolWG 命令：
   volwg manager links      查看本机保存的全部 SS 链接
   volwg diagnose ID        诊断指定线路的 WG、SS、转发和 SSH
   volwg ssh ID             从 VPS 通过 WireGuard 进入家宽机 SSH
+  volwg wan-follow enable --node ID
+                            OpenWrt 家宽机自动跟随 WAN/5G 默认出口
+  volwg wan-follow status --node ID
+                            查看 WireGuard 当前使用的上游出口
   volwg key [参数]         仅 WireGuard：双 SSH 窗口公钥向导
   volwg remove --node ID   删除本机指定线路并归档配置
   volwg purge              清空本机全部 VolWG 线路和旧记录（保留程序）
@@ -359,6 +363,7 @@ case "$subcommand" in
     ;;
   diagnose) shift; exec bash "$LIB_DIR/wg-home-manager.sh" diagnose "$@" ;;
   ssh) shift; exec bash "$LIB_DIR/wg-home-manager.sh" ssh "$@" ;;
+  wan-follow) shift; exec bash "$LIB_DIR/wg-home-wan-follow.sh" "$@" ;;
   key) shift; exec bash "$LIB_DIR/wg-home-key-wizard.sh" "$@" ;;
   pair) shift; exec bash "$LIB_DIR/wg-home-key-wizard.sh" --full "$@" ;;
   remove|delete) shift; exec bash "$LIB_DIR/wg-home-remove.sh" "$@" ;;

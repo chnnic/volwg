@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
 ROLE=""
 FULL_STACK="0"
 NODE_ID=""
@@ -1563,6 +1565,15 @@ fi
 install_remote_ssh_public_key
 
 save_metadata
+
+if [[ "$ROLE" == "home" && "$SYSTEM_KIND" == "openwrt" ]]; then
+  [[ -f "$SCRIPT_DIR/wg-home-wan-follow.sh" ]] || die "缺少 wg-home-wan-follow.sh，请先运行 volwg update"
+  bash "$SCRIPT_DIR/wg-home-wan-follow.sh" enable \
+    --node "$NODE_ID" \
+    --interface "$WG_IFACE" \
+    --endpoint "$VPS_ENDPOINT" \
+    --port "$VPS_WG_PORT"
+fi
 
 if [[ "$FULL_STACK" == "1" ]]; then
   if [[ "$ROLE" == "vps" ]]; then
