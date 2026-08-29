@@ -92,6 +92,8 @@ Debian 11 安装 ss-rust 时使用 musl 静态构建，不依赖较新的 glibc�
 
 SSH 入口会直接建立真实连接，不会先做 TCP 预连接，因此也兼容使用 systemd socket 激活 SSH 的精简 Debian/LXC；线路诊断仍可单独检查端口状态。
 
+OpenWrt 如果原有 Dropbear 只绑定 LAN 接口，即使相同端口已被占用，VolWG 仍会为 WireGuard 地址创建独立实例。线路密钥模式下，该专用实例关闭密码认证，只接受对应公钥；原有 LAN 管理实例不会被修改。
+
 ## 家宽服务端选择
 
 全自动向导会询问家宽机的 SS2022 服务端后端：

@@ -101,8 +101,10 @@ ssh_function="$(awk '/^ssh_to_home\(\)/,/^}/' "$ROOT_DIR/wg-home-manager.sh")"
 if grep -Fq 'tcp_probe "$home_ip"' <<<"$ssh_function"; then
   exit 1
 fi
-grep -Fq 'BUILTIN_VERSION="1.4.18"' "$ROOT_DIR/volwg"
-grep -Fxq '1.4.18' "$ROOT_DIR/VERSION"
+grep -Fq '0\\.0\\.0\\.0|$WG_PREFIX\\.2|\\*|::' "$ROOT_DIR/wg-home-key-wizard.sh"
+grep -Fq 'dropbear.volwg_$NODE_ID.PasswordAuth=off' "$ROOT_DIR/wg-home-key-wizard.sh"
+grep -Fq 'BUILTIN_VERSION="1.4.19"' "$ROOT_DIR/volwg"
+grep -Fxq '1.4.19' "$ROOT_DIR/VERSION"
 
 menu_output="$(printf '2\n2\n0\n0\n0\n' | "$ROOT_DIR/volwg")"
 grep -Fq '此模式只会' <<<"$menu_output"

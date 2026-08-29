@@ -1502,12 +1502,17 @@ else
         uci set "firewall.allow_ssh_$NODE_ID.proto=tcp"
         uci set "firewall.allow_ssh_$NODE_ID.dest_port=$HOME_SSH_PORT"
         uci set "firewall.allow_ssh_$NODE_ID.target=ACCEPT"
-        if ! { ss -lnt 2>/dev/null || netstat -lnt 2>/dev/null || true; } | grep -Eq "[:.]${HOME_SSH_PORT}[[:space:]]"; then
+        if ! { ss -lnt 2>/dev/null || netstat -lnt 2>/dev/null || true; } | grep -Eq "(^|[[:space:]])(0\\.0\\.0\\.0|$WG_PREFIX\\.2|\\*|::):${HOME_SSH_PORT}[[:space:]]"; then
           uci set "dropbear.volwg_$NODE_ID=dropbear"
           uci set "dropbear.volwg_$NODE_ID.Interface=$WG_IFACE"
           uci set "dropbear.volwg_$NODE_ID.Port=$HOME_SSH_PORT"
-          uci set "dropbear.volwg_$NODE_ID.PasswordAuth=on"
-          uci set "dropbear.volwg_$NODE_ID.RootPasswordAuth=on"
+          if [[ "$REMOTE_SSH_AUTH" == "key" ]]; then
+            uci set "dropbear.volwg_$NODE_ID.PasswordAuth=off"
+            uci set "dropbear.volwg_$NODE_ID.RootPasswordAuth=off"
+          else
+            uci set "dropbear.volwg_$NODE_ID.PasswordAuth=on"
+            uci set "dropbear.volwg_$NODE_ID.RootPasswordAuth=on"
+          fi
         fi
       fi
     fi
