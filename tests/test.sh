@@ -97,8 +97,12 @@ grep -Fq '/usr/bin/ssserver /usr/local/bin/ssserver' "$ROOT_DIR/wg-home-key-wiza
 grep -Fq '/usr/bin/ssserver /usr/local/bin/ssserver' "$ROOT_DIR/wg-home-deploy.sh"
 grep -Fq 'mkdir -p "$auth_dir"' "$ROOT_DIR/wg-home-key-wizard.sh"
 grep -Fq 'mkdir -p /etc/dropbear' "$ROOT_DIR/wg-home-deploy.sh"
-grep -Fq 'BUILTIN_VERSION="1.4.17"' "$ROOT_DIR/volwg"
-grep -Fxq '1.4.17' "$ROOT_DIR/VERSION"
+ssh_function="$(awk '/^ssh_to_home\(\)/,/^}/' "$ROOT_DIR/wg-home-manager.sh")"
+if grep -Fq 'tcp_probe "$home_ip"' <<<"$ssh_function"; then
+  exit 1
+fi
+grep -Fq 'BUILTIN_VERSION="1.4.18"' "$ROOT_DIR/volwg"
+grep -Fxq '1.4.18' "$ROOT_DIR/VERSION"
 
 menu_output="$(printf '2\n2\n0\n0\n0\n' | "$ROOT_DIR/volwg")"
 grep -Fq '此模式只会' <<<"$menu_output"

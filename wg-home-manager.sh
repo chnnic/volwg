@@ -711,7 +711,6 @@ ssh_to_home() {
   ssh_port="${ssh_port:-22}"
   home_ip="$prefix.2"
   [[ "$enabled" == "1" ]] || die "该线路未登记开启隧道内 SSH；可先运行 volwg diagnose $id $ssh_port 检查"
-  tcp_probe "$home_ip" "$ssh_port" || die "无法连接家宽 SSH：$home_ip:$ssh_port"
   ssh_args=(-o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -p "$ssh_port")
   if [[ "$ssh_auth" == "key" ]]; then
     [[ -n "$ssh_identity" && -s "$ssh_identity" ]] || die "线路 SSH 私钥不存在：${ssh_identity:-未记录}"

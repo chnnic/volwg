@@ -90,6 +90,8 @@ Debian 11 安装 ss-rust 时使用 musl 静态构建，不依赖较新的 glibc�
 
 连接目标是该线路的 WireGuard 私网地址，例如 `10.88.1.2`，因此不需要家宽公网 IP、FRP 或额外公网 SSH 端口。VolWG 只开放该 WireGuard 接口上的指定 SSH 端口；其他来源仍由家宽机原有防火墙控制。`volwg ssh 节点ID` 会读取线路记录并自动选择对应私钥，不需要再次输入家宽机密码。
 
+SSH 入口会直接建立真实连接，不会先做 TCP 预连接，因此也兼容使用 systemd socket 激活 SSH 的精简 Debian/LXC；线路诊断仍可单独检查端口状态。
+
 ## 家宽服务端选择
 
 全自动向导会询问家宽机的 SS2022 服务端后端：
