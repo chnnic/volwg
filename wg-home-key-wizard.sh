@@ -607,7 +607,8 @@ install_remote_ssh_public_key() {
     auth_dir="/root/.ssh"
     auth_file="$auth_dir/authorized_keys"
   fi
-  install -d -m 700 "$auth_dir"
+  mkdir -p "$auth_dir"
+  chmod 700 "$auth_dir"
   touch "$auth_file"
   chmod 600 "$auth_file"
   grep -qxF "$REMOTE_SSH_PUBLIC_KEY" "$auth_file" 2>/dev/null || printf '%s\n' "$REMOTE_SSH_PUBLIC_KEY" >>"$auth_file"

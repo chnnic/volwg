@@ -76,6 +76,8 @@ Debian 11 安装 ss-rust 时使用 musl 静态构建，不依赖较新的 glibc�
 
 密钥模式会在 VPS 的 `/etc/wg-home-exit/ssh/` 中为每个节点生成独立 Ed25519 私钥。配对码只携带公钥，家宽机自动将公钥加入 OpenWrt 的 `/etc/dropbear/authorized_keys` 或 Linux 的 `/root/.ssh/authorized_keys`。私钥不会进入配对码，也不会复制到家宽机；删除线路时会随线路配置一起归档。
 
+公钥安装只使用 BusyBox 自带的基础命令，兼容没有 GNU `install` 命令的精简 OpenWrt。
+
 开启后登录 VPS，可以直接从 VolWG 菜单选择线路进入家宽机：
 
     volwg

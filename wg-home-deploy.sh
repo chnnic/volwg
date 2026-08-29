@@ -770,7 +770,7 @@ vps_public_key="$(ssh_vps "set -eu; install -d -m 700 /etc/wireguard; umask 077;
 if [[ "$home_kind" == "openwrt" ]]; then
   openwrt_public_key="$(ssh_openwrt "set -eu; mkdir -p /etc/wireguard; chmod 700 /etc/wireguard; umask 077; test -s '/etc/wireguard/$WG_IFACE.key' || wg genkey > '/etc/wireguard/$WG_IFACE.key'; wg pubkey < '/etc/wireguard/$WG_IFACE.key' > '/etc/wireguard/$WG_IFACE.pub'; cat '/etc/wireguard/$WG_IFACE.pub'")"
 else
-  openwrt_public_key="$(ssh_openwrt "set -eu; install -d -m 700 /etc/wireguard; umask 077; test -s '/etc/wireguard/$WG_IFACE.key' || wg genkey > '/etc/wireguard/$WG_IFACE.key'; wg pubkey < '/etc/wireguard/$WG_IFACE.key' > '/etc/wireguard/$WG_IFACE.pub'; cat '/etc/wireguard/$WG_IFACE.pub'")"
+  openwrt_public_key="$(ssh_openwrt "set -eu; mkdir -p /etc/wireguard; chmod 700 /etc/wireguard; umask 077; test -s '/etc/wireguard/$WG_IFACE.key' || wg genkey > '/etc/wireguard/$WG_IFACE.key'; wg pubkey < '/etc/wireguard/$WG_IFACE.key' > '/etc/wireguard/$WG_IFACE.pub'; cat '/etc/wireguard/$WG_IFACE.pub'")"
 fi
 [[ -n "$vps_public_key" && -n "$openwrt_public_key" ]] || die "生成 WireGuard 公钥失败"
 
@@ -1068,7 +1068,8 @@ fi
 uci commit firewall
 command -v dropbear >/dev/null 2>&1 && uci commit dropbear || true
 if test '$REMOTE_SSH_ENABLED' = 1 && test '$REMOTE_SSH_AUTH' = key; then
-  install -d -m 700 /etc/dropbear
+  mkdir -p /etc/dropbear
+  chmod 700 /etc/dropbear
   touch /etc/dropbear/authorized_keys
   chmod 600 /etc/dropbear/authorized_keys
   AUTHORIZED_KEY=\$(cat /tmp/volwg-home-ssh.pub)
@@ -1331,7 +1332,7 @@ scp_openwrt "$SCRIPT_DIR/VERSION" /tmp/volwg-version
 if [[ "$home_kind" == "openwrt" ]]; then
   ssh_openwrt "set -eu; mkdir -p /usr/lib/volwg /usr/bin; cp /tmp/volwg-deploy /usr/lib/volwg/wg-home-deploy.sh; cp /tmp/volwg-key-wizard /usr/lib/volwg/wg-home-key-wizard.sh; cp /tmp/volwg-remove /usr/lib/volwg/wg-home-remove.sh; cp /tmp/volwg-purge /usr/lib/volwg/wg-home-purge.sh; cp /tmp/wg-home-manager /usr/lib/volwg/wg-home-manager.sh; cp /tmp/volwg-version /usr/lib/volwg/VERSION; cp /tmp/volwg-launcher /usr/bin/volwg; chmod 700 /usr/lib/volwg/wg-home-deploy.sh /usr/lib/volwg/wg-home-key-wizard.sh /usr/lib/volwg/wg-home-remove.sh /usr/lib/volwg/wg-home-purge.sh /usr/lib/volwg/wg-home-manager.sh; chmod 644 /usr/lib/volwg/VERSION; chmod 755 /usr/bin/volwg; rm -f /tmp/wg-home-manager /tmp/volwg-deploy /tmp/volwg-key-wizard /tmp/volwg-remove /tmp/volwg-purge /tmp/volwg-launcher /tmp/volwg-version"
 else
-  ssh_openwrt "set -eu; install -d -m 755 /usr/local/lib/volwg /usr/local/bin; install -m 700 /tmp/volwg-deploy /usr/local/lib/volwg/wg-home-deploy.sh; install -m 700 /tmp/volwg-key-wizard /usr/local/lib/volwg/wg-home-key-wizard.sh; install -m 700 /tmp/volwg-remove /usr/local/lib/volwg/wg-home-remove.sh; install -m 700 /tmp/volwg-purge /usr/local/lib/volwg/wg-home-purge.sh; install -m 700 /tmp/wg-home-manager /usr/local/lib/volwg/wg-home-manager.sh; install -m 644 /tmp/volwg-version /usr/local/lib/volwg/VERSION; install -m 755 /tmp/volwg-launcher /usr/local/bin/volwg; rm -f /tmp/wg-home-manager /tmp/volwg-deploy /tmp/volwg-key-wizard /tmp/volwg-remove /tmp/volwg-purge /tmp/volwg-launcher /tmp/volwg-version"
+  ssh_openwrt "set -eu; mkdir -p /usr/local/lib/volwg /usr/local/bin; cp /tmp/volwg-deploy /usr/local/lib/volwg/wg-home-deploy.sh; cp /tmp/volwg-key-wizard /usr/local/lib/volwg/wg-home-key-wizard.sh; cp /tmp/volwg-remove /usr/local/lib/volwg/wg-home-remove.sh; cp /tmp/volwg-purge /usr/local/lib/volwg/wg-home-purge.sh; cp /tmp/wg-home-manager /usr/local/lib/volwg/wg-home-manager.sh; cp /tmp/volwg-version /usr/local/lib/volwg/VERSION; cp /tmp/volwg-launcher /usr/local/bin/volwg; chmod 700 /usr/local/lib/volwg/wg-home-deploy.sh /usr/local/lib/volwg/wg-home-key-wizard.sh /usr/local/lib/volwg/wg-home-remove.sh /usr/local/lib/volwg/wg-home-purge.sh /usr/local/lib/volwg/wg-home-manager.sh; chmod 644 /usr/local/lib/volwg/VERSION; chmod 755 /usr/local/bin/volwg; rm -f /tmp/wg-home-manager /tmp/volwg-deploy /tmp/volwg-key-wizard /tmp/volwg-remove /tmp/volwg-purge /tmp/volwg-launcher /tmp/volwg-version"
 fi
 
 echo
