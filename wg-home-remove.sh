@@ -130,6 +130,8 @@ if [[ "$SYSTEM_KIND" == "openwrt" ]]; then
   archive_item "/etc/wireguard/$WG_IFACE.conf"
   archive_item "/etc/wireguard/$WG_IFACE.key"
   archive_item "/etc/wireguard/$WG_IFACE.pub"
+  archive_item "/etc/wg-home-exit/ssh/${NODE_ID}_ed25519"
+  archive_item "/etc/wg-home-exit/ssh/${NODE_ID}_ed25519.pub"
   archive_item "/etc/ss-rust-wg-home/$NODE_ID"
   archive_item "/etc/xray-wg-home/$NODE_ID"
   archive_item "$MANUAL_STATE"
@@ -162,6 +164,8 @@ else
   archive_item "/etc/wireguard/$WG_IFACE.conf"
   archive_item "/etc/wireguard/$WG_IFACE.key"
   archive_item "/etc/wireguard/$WG_IFACE.pub"
+  archive_item "/etc/wg-home-exit/ssh/${NODE_ID}_ed25519"
+  archive_item "/etc/wg-home-exit/ssh/${NODE_ID}_ed25519.pub"
   archive_item "$MANUAL_STATE"
   systemctl daemon-reload
 fi

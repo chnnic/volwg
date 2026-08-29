@@ -20,6 +20,7 @@ printf '%s\n' \
   'VPS_SS_PORT=31000' \
   'REMOTE_SSH_ENABLED=1' \
   'HOME_SSH_PORT=2222' \
+  'REMOTE_SSH_AUTH=password' \
   'SS_ENDPOINT=198.51.100.10:31000' \
   >"$TEST_DIR/nodes/line1.conf"
 
@@ -87,11 +88,15 @@ grep -Fq 'volwg diagnose ID' "$ROOT_DIR/volwg"
 grep -Fq 'volwg ssh ID' "$ROOT_DIR/volwg"
 grep -Fq '通过 WireGuard 进入家宽机 SSH' "$ROOT_DIR/wg-home-manager.sh"
 grep -Fq -- '--remote-ssh on|off' < <(bash "$ROOT_DIR/wg-home-key-wizard.sh" --help)
+grep -Fq -- '--remote-ssh-auth TYPE' < <(bash "$ROOT_DIR/wg-home-key-wizard.sh" --help)
 grep -Fq 'REMOTE_SSH_ENABLED=$REMOTE_SSH_ENABLED' "$ROOT_DIR/wg-home-key-wizard.sh"
+grep -Fq 'HOME_SSH_IDENTITY=$HOME_SSH_IDENTITY' "$ROOT_DIR/wg-home-key-wizard.sh"
+grep -Fq '线路专用密钥' "$ROOT_DIR/wg-home-key-wizard.sh"
+grep -Fq 'ssh_args+=(-i "$ssh_identity" -o IdentitiesOnly=yes)' "$ROOT_DIR/wg-home-manager.sh"
 grep -Fq '/usr/bin/ssserver /usr/local/bin/ssserver' "$ROOT_DIR/wg-home-key-wizard.sh"
 grep -Fq '/usr/bin/ssserver /usr/local/bin/ssserver' "$ROOT_DIR/wg-home-deploy.sh"
-grep -Fq 'BUILTIN_VERSION="1.4.15"' "$ROOT_DIR/volwg"
-grep -Fxq '1.4.15' "$ROOT_DIR/VERSION"
+grep -Fq 'BUILTIN_VERSION="1.4.16"' "$ROOT_DIR/volwg"
+grep -Fxq '1.4.16' "$ROOT_DIR/VERSION"
 
 menu_output="$(printf '2\n2\n0\n0\n0\n' | "$ROOT_DIR/volwg")"
 grep -Fq '此模式只会' <<<"$menu_output"
@@ -148,13 +153,15 @@ pair_functions="$(awk '/^while \(\(\$#\)\); do/{exit} {print}' "$ROOT_DIR/wg-hom
   PUBLIC_SS_ENABLED="1"
   REMOTE_SSH_ENABLED="1"
   HOME_SSH_PORT="2222"
+  REMOTE_SSH_AUTH="key"
+  REMOTE_SSH_PUBLIC_KEY="ssh-ed25519 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= volwg-test1"
   SS_PASSWORD="AAAAAAAAAAAAAAAAAAAAAA=="
   local_public_key="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
   [[ -n "$local_public_key" ]]
   pair_code="$(make_pair_code)"
   NODE_ID="" DISPLAY_NAME="" WG_PREFIX="" VPS_ENDPOINT=""
   VPS_WG_PORT="" HOME_WG_PORT="" VPS_SS_PORT="" HOME_SS_PORT=""
-  HOME_BACKEND="" MODE="" PUBLIC_SS_ENABLED="" REMOTE_SSH_ENABLED="" HOME_SSH_PORT="" SS_PASSWORD="" PAIR_PEER_PUBLIC_KEY=""
+  HOME_BACKEND="" MODE="" PUBLIC_SS_ENABLED="" REMOTE_SSH_ENABLED="" HOME_SSH_PORT="" REMOTE_SSH_AUTH="" REMOTE_SSH_PUBLIC_KEY="" SS_PASSWORD="" PAIR_PEER_PUBLIC_KEY=""
   load_pair_code "$pair_code"
   [[ "$PAIR_CODE_LOADED" == "1" ]]
   [[ "$NODE_ID" == "test1" && "$DISPLAY_NAME" == "测试线路" ]]
@@ -163,6 +170,7 @@ pair_functions="$(awk '/^while \(\(\$#\)\); do/{exit} {print}' "$ROOT_DIR/wg-hom
   [[ "$HOME_WG_PORT" == "52002" && "$VPS_SS_PORT" == "32001" ]]
   [[ "$HOME_BACKEND" == "ss-rust" && "$MODE" == "relay" && "$PUBLIC_SS_ENABLED" == "1" ]]
   [[ "$REMOTE_SSH_ENABLED" == "1" && "$HOME_SSH_PORT" == "2222" ]]
+  [[ "$REMOTE_SSH_AUTH" == "key" && "$REMOTE_SSH_PUBLIC_KEY" == ssh-ed25519\ * ]]
   [[ "$SS_PASSWORD" == "AAAAAAAAAAAAAAAAAAAAAA==" ]]
   [[ "$PAIR_PEER_PUBLIC_KEY" == "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" ]]
 )

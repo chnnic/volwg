@@ -24,6 +24,9 @@ SS_RUST_VERSION="v1.25.0"
 PUBLIC_SS_ENABLED="1"
 REMOTE_SSH_ENABLED="0"
 HOME_TUNNEL_SSH_PORT="22"
+REMOTE_SSH_AUTH="key"
+HOME_SSH_IDENTITY=""
+REMOTE_SSH_PUBLIC_KEY=""
 WG_PREFIX="10.88.0"
 NODE_ID="home1"
 DISPLAY_NAME="家宽线路 1"
@@ -66,6 +69,7 @@ usage() {
   --public-ss on|off        是否开放公网 SS，默认 on
   --remote-ssh on|off       是否允许 VPS 通过 WireGuard 进入家宽 SSH，默认 off
   --tunnel-ssh-port PORT    家宽机实际 SSH 监听端口（不是 FRP 外部端口），默认 22
+  --remote-ssh-auth TYPE    key（推荐，线路专用密钥）或 password
   --home-backend TYPE       家宽服务端：ss-rust（默认）或 xray
   --wg-port PORT            兼容选项：同时设置两端 WireGuard 端口
   --ss-port PORT            兼容选项：同时设置两端 SS 端口
@@ -153,7 +157,7 @@ confirm_wireguard_only() {
 }
 
 guided_full_deploy() {
-  local mode_choice backend_choice public_ss_choice remote_ssh_choice default_public_host node_answer name_answer
+  local mode_choice backend_choice public_ss_choice remote_ssh_choice remote_ssh_auth_choice default_public_host node_answer name_answer
 
   echo
   echo "完整部署的连接要求："
@@ -245,6 +249,14 @@ guided_full_deploy() {
     2)
       REMOTE_SSH_ENABLED="1"
       HOME_TUNNEL_SSH_PORT="$(prompt_with_default "家宽机实际 SSH 监听端口（不是 FRP 外部端口）" "$HOME_TUNNEL_SSH_PORT")"
+      echo "  1) 线路专用密钥（推荐；私钥只保存在 VPS）"
+      echo "  2) 家宽机 root 密码或系统现有 SSH 配置"
+      read -r -p "请选择认证方式 [1-2，默认 1]：" remote_ssh_auth_choice
+      case "${remote_ssh_auth_choice:-1}" in
+        1) REMOTE_SSH_AUTH="key" ;;
+        2) REMOTE_SSH_AUTH="password" ;;
+        *) die "SSH 认证方式选择无效" ;;
+      esac
       ;;
     *) die "隧道内 SSH 选择无效" ;;
   esac
@@ -292,6 +304,7 @@ while (($#)); do
       shift 2
       ;;
     --tunnel-ssh-port) HOME_TUNNEL_SSH_PORT="${2:-}"; shift 2 ;;
+    --remote-ssh-auth) REMOTE_SSH_AUTH="${2:-}"; shift 2 ;;
     --home-backend) HOME_BACKEND="${2:-}"; shift 2 ;;
     --wg-port) VPS_WG_PORT="${2:-}"; HOME_WG_PORT="${2:-}"; shift 2 ;;
     --ss-port) VPS_SS_PORT="${2:-}"; HOME_SS_PORT="${2:-}"; shift 2 ;;
@@ -319,6 +332,7 @@ fi
 [[ "$HOME_BACKEND" == "ss-rust" || "$HOME_BACKEND" == "xray" ]] || die "--home-backend 必须是 ss-rust 或 xray"
 [[ "$PUBLIC_SS_ENABLED" == "0" || "$PUBLIC_SS_ENABLED" == "1" ]] || die "公网 SS 开关无效"
 [[ "$REMOTE_SSH_ENABLED" == "0" || "$REMOTE_SSH_ENABLED" == "1" ]] || die "隧道 SSH 开关无效"
+[[ "$REMOTE_SSH_AUTH" == "key" || "$REMOTE_SSH_AUTH" == "password" ]] || die "SSH 认证方式必须是 key 或 password"
 [[ "$NODE_ID" =~ ^[a-z0-9][a-z0-9_]{0,7}$ ]] || die "--node 必须是 1-8 位小写字母、数字或下划线"
 [[ -n "$DISPLAY_NAME" ]] || die "--name 不能为空"
 [[ -n "$VPS_TARGET" ]] || die "缺少 --vps"
@@ -521,6 +535,21 @@ base64url_value() {
   printf '%s' "$1" | base64 | tr '+/' '-_' | tr -d '=\r\n'
 }
 
+prepare_remote_ssh_key() {
+  [[ "$REMOTE_SSH_ENABLED" == "1" && "$REMOTE_SSH_AUTH" == "key" ]] || return 0
+  HOME_SSH_IDENTITY="/etc/wg-home-exit/ssh/${NODE_ID}_ed25519"
+  REMOTE_SSH_PUBLIC_KEY="$(ssh_vps "set -eu
+command -v ssh-keygen >/dev/null 2>&1 || { export DEBIAN_FRONTEND=noninteractive; apt-get update >/dev/null; apt-get install -y openssh-client >/dev/null; }
+install -d -m 700 /etc/wg-home-exit/ssh
+if test ! -s '$HOME_SSH_IDENTITY'; then ssh-keygen -q -t ed25519 -N '' -C 'volwg-$NODE_ID' -f '$HOME_SSH_IDENTITY'; fi
+ssh-keygen -y -f '$HOME_SSH_IDENTITY' | sed 's|\$| volwg-$NODE_ID|'
+chmod 600 '$HOME_SSH_IDENTITY'
+chmod 644 '$HOME_SSH_IDENTITY.pub' 2>/dev/null || true")"
+  [[ "$REMOTE_SSH_PUBLIC_KEY" == ssh-*\ * || "$REMOTE_SSH_PUBLIC_KEY" == ecdsa-*\ * ]] || die "VPS 线路 SSH 公钥生成失败"
+  printf '%s\n' "$REMOTE_SSH_PUBLIC_KEY" >"$TMP_DIR/home-ssh-authorized-key.pub"
+  chmod 600 "$TMP_DIR/home-ssh-authorized-key.pub"
+}
+
 TMP_DIR="$(mktemp -d)"
 chmod 700 "$TMP_DIR"
 cleanup() {
@@ -551,7 +580,7 @@ else
   echo "VPS 公网 SS：已关闭"
 fi
 if [[ "$REMOTE_SSH_ENABLED" == "1" ]]; then
-  echo "隧道内 SSH：开启，root@$WG_PREFIX.2:$HOME_TUNNEL_SSH_PORT"
+  echo "隧道内 SSH：开启，root@$WG_PREFIX.2:$HOME_TUNNEL_SSH_PORT（认证：$REMOTE_SSH_AUTH）"
 else
   echo "隧道内 SSH：关闭（默认）"
 fi
@@ -563,6 +592,8 @@ if [[ "$ASSUME_YES" != "1" ]]; then
   read -r -p "输入 yes 继续：" answer
   [[ "$answer" == "yes" ]] || die "用户取消"
 fi
+
+prepare_remote_ssh_key
 
 echo "[1/8] 检查 SSH 与系统"
 # shellcheck disable=SC2016
@@ -942,6 +973,9 @@ else
   linux_backend_service="$TMP_DIR/home-xray.service"
 fi
 scp_openwrt "$backend_config" /tmp/wg-home-backend.json
+if [[ "$REMOTE_SSH_ENABLED" == "1" && "$REMOTE_SSH_AUTH" == "key" ]]; then
+  scp_openwrt "$TMP_DIR/home-ssh-authorized-key.pub" /tmp/volwg-home-ssh.pub
+fi
 if [[ "$home_kind" == "openwrt" ]]; then
   scp_openwrt "$openwrt_backend_init" /tmp/wg-home-backend-init
   ssh_openwrt "set -eu
@@ -1033,6 +1067,14 @@ if test '$REMOTE_SSH_ENABLED' = 1; then
 fi
 uci commit firewall
 command -v dropbear >/dev/null 2>&1 && uci commit dropbear || true
+if test '$REMOTE_SSH_ENABLED' = 1 && test '$REMOTE_SSH_AUTH' = key; then
+  install -d -m 700 /etc/dropbear
+  touch /etc/dropbear/authorized_keys
+  chmod 600 /etc/dropbear/authorized_keys
+  AUTHORIZED_KEY=\$(cat /tmp/volwg-home-ssh.pub)
+  grep -qxF \"\$AUTHORIZED_KEY\" /etc/dropbear/authorized_keys 2>/dev/null || printf '%s\n' \"\$AUTHORIZED_KEY\" >>/etc/dropbear/authorized_keys
+  rm -f /tmp/volwg-home-ssh.pub
+fi
 '/etc/init.d/$HOME_SERVICE' enable"
 
   if [[ "$openwrt_had_wg" == "0" ]]; then
@@ -1086,6 +1128,14 @@ fi
 install -m 644 /tmp/wg-home-backend.service '/etc/systemd/system/$HOME_SERVICE.service'
 install -m 700 '/tmp/wgh-input-$NODE_ID' '/usr/local/sbin/wgh-input-$NODE_ID'
 install -m 644 '/tmp/wgh-input-$NODE_ID.service' '/etc/systemd/system/wgh-input-$NODE_ID.service'
+if test '$REMOTE_SSH_ENABLED' = 1 && test '$REMOTE_SSH_AUTH' = key; then
+  install -d -m 700 /root/.ssh
+  touch /root/.ssh/authorized_keys
+  chmod 600 /root/.ssh/authorized_keys
+  AUTHORIZED_KEY=\$(cat /tmp/volwg-home-ssh.pub)
+  grep -qxF \"\$AUTHORIZED_KEY\" /root/.ssh/authorized_keys 2>/dev/null || printf '%s\n' \"\$AUTHORIZED_KEY\" >>/root/.ssh/authorized_keys
+  rm -f /tmp/volwg-home-ssh.pub
+fi
 rm -f /tmp/home-wg.conf /tmp/wg-home-backend.json /tmp/wg-home-backend.service '/tmp/wgh-input-$NODE_ID' '/tmp/wgh-input-$NODE_ID.service'
 systemctl daemon-reload
 systemctl enable 'wg-quick@$WG_IFACE.service' >/dev/null
@@ -1237,6 +1287,8 @@ MODE=$MODE
 PUBLIC_SS_ENABLED=$PUBLIC_SS_ENABLED
 REMOTE_SSH_ENABLED=$REMOTE_SSH_ENABLED
 HOME_SSH_PORT=$HOME_TUNNEL_SSH_PORT
+REMOTE_SSH_AUTH=$REMOTE_SSH_AUTH
+HOME_SSH_IDENTITY=$HOME_SSH_IDENTITY
 HOME_BACKEND=$HOME_BACKEND
 WG_INTERFACE=$WG_IFACE
 WG_PORT=$VPS_WG_PORT
@@ -1344,7 +1396,12 @@ echo "  volwg manager node $NODE_ID"
 echo "  volwg diagnose $NODE_ID"
 if [[ "$REMOTE_SSH_ENABLED" == "1" ]]; then
   echo "隧道内 SSH：volwg ssh $NODE_ID"
-  echo "直接连接：ssh -p $HOME_TUNNEL_SSH_PORT root@$WG_PREFIX.2"
+  if [[ "$REMOTE_SSH_AUTH" == "key" ]]; then
+    echo "线路 SSH 私钥：$HOME_SSH_IDENTITY"
+    echo "直接连接：ssh -i $HOME_SSH_IDENTITY -p $HOME_TUNNEL_SSH_PORT root@$WG_PREFIX.2"
+  else
+    echo "直接连接：ssh -p $HOME_TUNNEL_SSH_PORT root@$WG_PREFIX.2"
+  fi
 else
   echo "隧道内 SSH：关闭（默认）"
 fi

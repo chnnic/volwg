@@ -67,6 +67,7 @@ usage() {
   每条线路彼此独立，不会自动配置负载均衡。
   新部署默认同时保存公网和 WireGuard 私网 SS 链接；relay/direct 仅代表推荐入口。
   私网链接只能在已连接对应 WireGuard 隧道的 VPS/Xray 中使用。
+  线路专用密钥启用后，ssh 命令会自动读取该节点登记的私钥，不再询问密码。
   node 格式可选：ss、xray、routing、all（默认 all）。
 EOF
 }
@@ -448,7 +449,7 @@ list_links() {
 }
 
 show_node() {
-  local file="$1" id name mode backend iface vps_wg_port home_wg_port prefix vps_ss_port home_ss_port remote_ssh ssh_port public_endpoint private_endpoint public_link private_link public_outbound private_outbound
+  local file="$1" id name mode backend iface vps_wg_port home_wg_port prefix vps_ss_port home_ss_port remote_ssh ssh_port ssh_auth ssh_identity public_endpoint private_endpoint public_link private_link public_outbound private_outbound
   id="$(field "$file" NODE_ID)"
   name="$(decode "$(field "$file" DISPLAY_NAME_B64)")"
   mode="$(field "$file" MODE)"
@@ -462,6 +463,8 @@ show_node() {
   home_ss_port="$(field_fallback "$file" HOME_SS_PORT SS_PORT)"
   remote_ssh="$(field "$file" REMOTE_SSH_ENABLED)"
   ssh_port="$(field "$file" HOME_SSH_PORT)"
+  ssh_auth="$(field "$file" REMOTE_SSH_AUTH)"
+  ssh_identity="$(field "$file" HOME_SSH_IDENTITY)"
   public_endpoint="$(public_ss_endpoint "$file")"
   private_endpoint="$(private_ss_endpoint "$file")"
   public_link="$(public_ss_link "$file")"
@@ -478,7 +481,9 @@ show_node() {
   echo "  家宽机本地 UDP：${home_wg_port:-未记录}"
   echo "SS 端口：VPS ${vps_ss_port:-未记录}，家宽机 ${home_ss_port:-未记录}"
   if [[ "$remote_ssh" == "1" ]]; then
-    echo "隧道内 SSH：开启，root@${prefix}.2:${ssh_port:-22}（volwg ssh $id）"
+    echo "隧道内 SSH：开启，root@${prefix}.2:${ssh_port:-22}（认证：${ssh_auth:-password}）"
+    [[ -z "$ssh_identity" ]] || echo "  VPS 线路私钥：$ssh_identity"
+    echo "  连接：volwg ssh $id"
   else
     echo "隧道内 SSH：关闭"
   fi
@@ -592,7 +597,7 @@ tcp_probe() {
 
 diagnose_node() {
   local file="$1" ssh_port="${2:-}" id name iface prefix home_ip home_ss_port vps_ss_port
-  local public_enabled handshake now age failures=0 nft_service
+  local public_enabled handshake now age failures=0 nft_service ssh_auth ssh_identity
   id="$(field "$file" NODE_ID)"
   name="$(decode "$(field "$file" DISPLAY_NAME_B64)")"
   iface="$(field "$file" WG_INTERFACE)"
@@ -602,6 +607,8 @@ diagnose_node() {
   public_enabled="$(public_ss_enabled "$file")"
   ssh_port="${ssh_port:-$(field "$file" HOME_SSH_PORT)}"
   ssh_port="${ssh_port:-22}"
+  ssh_auth="$(field "$file" REMOTE_SSH_AUTH)"
+  ssh_identity="$(field "$file" HOME_SSH_IDENTITY)"
   [[ "$prefix" =~ ^([0-9]{1,3}\.){2}[0-9]{1,3}$ ]] || die "线路缺少有效 WireGuard 网段"
   [[ "$home_ss_port" =~ ^[0-9]+$ ]] || die "线路缺少有效家宽 SS 端口"
   if ! [[ "$ssh_port" =~ ^[0-9]+$ ]] || ((ssh_port < 1 || ssh_port > 65535)); then
@@ -664,6 +671,14 @@ diagnose_node() {
     echo "[提示] 家宽 SSH 未开放：$home_ip:$ssh_port"
     echo "       若安装时开启了隧道内 SSH，请确认填写的是家宽实际 SSH 端口。"
   fi
+  if [[ "$ssh_auth" == "key" ]]; then
+    if [[ -n "$ssh_identity" && -s "$ssh_identity" ]]; then
+      echo "[通过] 线路 SSH 私钥：$ssh_identity"
+    else
+      echo "[失败] 已登记密钥认证，但 VPS 私钥不存在：${ssh_identity:-未记录}"
+      ((failures++)) || true
+    fi
+  fi
   echo
   if ((failures == 0)); then
     echo "诊断结果：核心链路正常。"
@@ -685,18 +700,31 @@ interactive_diagnose() {
 }
 
 ssh_to_home() {
-  local file="$1" ssh_port="${2:-}" id prefix home_ip enabled
+  local file="$1" ssh_port="${2:-}" id prefix home_ip enabled ssh_auth ssh_identity
+  local -a ssh_args
   id="$(field "$file" NODE_ID)"
   prefix="$(field "$file" WG_PREFIX)"
   enabled="$(field "$file" REMOTE_SSH_ENABLED)"
+  ssh_auth="$(field "$file" REMOTE_SSH_AUTH)"
+  ssh_identity="$(field "$file" HOME_SSH_IDENTITY)"
   ssh_port="${ssh_port:-$(field "$file" HOME_SSH_PORT)}"
   ssh_port="${ssh_port:-22}"
   home_ip="$prefix.2"
   [[ "$enabled" == "1" ]] || die "该线路未登记开启隧道内 SSH；可先运行 volwg diagnose $id $ssh_port 检查"
   tcp_probe "$home_ip" "$ssh_port" || die "无法连接家宽 SSH：$home_ip:$ssh_port"
+  ssh_args=(-o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -p "$ssh_port")
+  if [[ "$ssh_auth" == "key" ]]; then
+    [[ -n "$ssh_identity" && -s "$ssh_identity" ]] || die "线路 SSH 私钥不存在：${ssh_identity:-未记录}"
+    ssh_args+=(-i "$ssh_identity" -o IdentitiesOnly=yes)
+  fi
   echo "正在通过 WireGuard 进入 $id：root@$home_ip:$ssh_port"
+  if [[ "$ssh_auth" == "key" ]]; then
+    echo "认证：线路专用密钥（私钥：$ssh_identity）"
+  else
+    echo "认证：家宽机密码或系统 SSH 配置"
+  fi
   echo "退出家宽 SSH 后会返回 SG/VPS 的 VolWG 菜单。"
-  ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -p "$ssh_port" "root@$home_ip"
+  ssh "${ssh_args[@]}" "root@$home_ip"
 }
 
 interactive_ssh() {

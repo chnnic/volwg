@@ -158,6 +158,8 @@ for node_id in "${NODE_IDS[@]}"; do
   archive_item "/etc/wireguard/$iface.conf"
   archive_item "/etc/wireguard/$iface.key"
   archive_item "/etc/wireguard/$iface.pub"
+  archive_item "/etc/wg-home-exit/ssh/${node_id}_ed25519"
+  archive_item "/etc/wg-home-exit/ssh/${node_id}_ed25519.pub"
   archive_item "/etc/ss-rust-wg-home/$node_id"
   archive_item "/etc/xray-wg-home/$node_id"
 done

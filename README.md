@@ -69,6 +69,13 @@ Debian 11 安装 ss-rust 时使用 musl 静态构建，不依赖较新的 glibc�
 
 完整部署会询问是否允许 VPS 通过该线路的 WireGuard 私网进入家宽机 SSH，默认选择“关闭”。开启时需要填写家宽机实际监听的 SSH 端口；这里填写设备内部端口，不是 FRP 映射后的外部端口。
 
+开启后可以选择认证方式：
+
+    1) 线路专用密钥（推荐）
+    2) 家宽机 root 密码或系统现有 SSH 配置
+
+密钥模式会在 VPS 的 `/etc/wg-home-exit/ssh/` 中为每个节点生成独立 Ed25519 私钥。配对码只携带公钥，家宽机自动将公钥加入 OpenWrt 的 `/etc/dropbear/authorized_keys` 或 Linux 的 `/root/.ssh/authorized_keys`。私钥不会进入配对码，也不会复制到家宽机；删除线路时会随线路配置一起归档。
+
 开启后登录 VPS，可以直接从 VolWG 菜单选择线路进入家宽机：
 
     volwg
@@ -79,7 +86,7 @@ Debian 11 安装 ss-rust 时使用 musl 静态构建，不依赖较新的 glibc�
     volwg ssh 节点ID
     volwg diagnose 节点ID
 
-连接目标是该线路的 WireGuard 私网地址，例如 `10.88.1.2`，因此不需要家宽公网 IP、FRP 或额外公网 SSH 端口。VolWG 只开放该 WireGuard 接口上的指定 SSH 端口；其他来源仍由家宽机原有防火墙控制。WireGuard 负责安全传输，SSH 登录仍使用家宽机自己的密码或 `authorized_keys`。
+连接目标是该线路的 WireGuard 私网地址，例如 `10.88.1.2`，因此不需要家宽公网 IP、FRP 或额外公网 SSH 端口。VolWG 只开放该 WireGuard 接口上的指定 SSH 端口；其他来源仍由家宽机原有防火墙控制。`volwg ssh 节点ID` 会读取线路记录并自动选择对应私钥，不需要再次输入家宽机密码。
 
 ## 家宽服务端选择
 

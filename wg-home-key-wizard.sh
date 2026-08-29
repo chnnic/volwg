@@ -17,6 +17,9 @@ PUBLIC_SS_ENABLED="1"
 REMOTE_SSH_ENABLED="0"
 HOME_SSH_PORT="22"
 REMOTE_SSH_CONFIGURED="0"
+REMOTE_SSH_AUTH="key"
+HOME_SSH_IDENTITY=""
+REMOTE_SSH_PUBLIC_KEY=""
 SS_PASSWORD=""
 SS_RUST_VERSION="v1.25.0"
 REPLACE_NODE="0"
@@ -66,6 +69,9 @@ WireGuard 接口、密钥和配置，默认不会覆盖其他节点。占用的�
   --public-ss on|off      是否在 VPS 开放公网 SS，默认 on
   --remote-ssh on|off     是否允许 VPS 通过 WireGuard 进入家宽 SSH，默认 off
   --home-ssh-port PORT    家宽机实际 SSH 监听端口，默认 22
+  --remote-ssh-auth TYPE  key（推荐，线路专用密钥）或 password
+  --remote-ssh-public-key KEY
+                          手动模式使用的 VPS 线路 SSH 公钥
   --mode relay|direct     默认推荐公网或私网入口，默认 relay
   --replace               明确替换相同节点 ID；替换前自动备份
   -h, --help
@@ -127,6 +133,12 @@ prompt_node_id() {
 
 valid_wg_key() {
   [[ "$1" =~ ^[A-Za-z0-9+/]{43}=$ ]]
+}
+
+valid_ssh_public_key() {
+  local key="$1"
+  [[ "$key" != *$'\n'* && "$key" != *$'\r'* ]] || return 1
+  [[ "$key" =~ ^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp[0-9]+)[[:space:]][A-Za-z0-9+/]+={0,3}([[:space:]].*)?$ ]]
 }
 
 valid_port() {
@@ -217,7 +229,8 @@ pair_field() {
 load_pair_code() {
   local code="$1" payload encoded_name decoded_node decoded_name decoded_prefix decoded_endpoint
   local decoded_vps_wg_port decoded_home_wg_port decoded_vps_ss_port decoded_home_ss_port
-  local decoded_backend decoded_mode decoded_public_ss decoded_remote_ssh decoded_home_ssh_port
+  local decoded_backend decoded_mode decoded_public_ss decoded_remote_ssh decoded_home_ssh_port decoded_remote_ssh_auth
+  local encoded_ssh_public_key decoded_ssh_public_key
   local decoded_password decoded_public_key
   [[ "$code" == VOLWG1.* ]] || { echo "错误：配对码格式无效，必须以 VOLWG1. 开头" >&2; return 1; }
   payload="$(base64url_decode "${code#VOLWG1.}")" || { echo "错误：配对码无法解码；当前系统需要 base64 或 openssl" >&2; return 1; }
@@ -236,8 +249,15 @@ load_pair_code() {
   decoded_public_ss="$(pair_field "$payload" PUBLIC_SS_ENABLED)"
   decoded_remote_ssh="$(pair_field "$payload" REMOTE_SSH_ENABLED)"
   decoded_home_ssh_port="$(pair_field "$payload" HOME_SSH_PORT)"
+  decoded_remote_ssh_auth="$(pair_field "$payload" REMOTE_SSH_AUTH)"
+  encoded_ssh_public_key="$(pair_field "$payload" REMOTE_SSH_PUBLIC_KEY_B64)"
   decoded_remote_ssh="${decoded_remote_ssh:-0}"
   decoded_home_ssh_port="${decoded_home_ssh_port:-22}"
+  decoded_remote_ssh_auth="${decoded_remote_ssh_auth:-password}"
+  decoded_ssh_public_key=""
+  if [[ -n "$encoded_ssh_public_key" ]]; then
+    decoded_ssh_public_key="$(printf '%s' "$encoded_ssh_public_key" | base64_decode_stream 2>/dev/null)" || { echo "错误：配对码 SSH 公钥无效" >&2; return 1; }
+  fi
   decoded_password="$(pair_field "$payload" SS_PASSWORD)"
   decoded_public_key="$(pair_field "$payload" VPS_PUBLIC_KEY)"
 
@@ -254,6 +274,10 @@ load_pair_code() {
   [[ "$decoded_public_ss" == "0" || "$decoded_public_ss" == "1" ]] || { echo "错误：配对码公网 SS 开关无效" >&2; return 1; }
   [[ "$decoded_remote_ssh" == "0" || "$decoded_remote_ssh" == "1" ]] || { echo "错误：配对码隧道 SSH 开关无效" >&2; return 1; }
   valid_port "$decoded_home_ssh_port" || { echo "错误：配对码家宽 SSH 端口无效" >&2; return 1; }
+  [[ "$decoded_remote_ssh_auth" == "key" || "$decoded_remote_ssh_auth" == "password" ]] || { echo "错误：配对码 SSH 认证方式无效" >&2; return 1; }
+  if [[ "$decoded_remote_ssh" == "1" && "$decoded_remote_ssh_auth" == "key" ]]; then
+    valid_ssh_public_key "$decoded_ssh_public_key" || { echo "错误：配对码缺少有效的线路 SSH 公钥" >&2; return 1; }
+  fi
   valid_ss_password "$decoded_password" || { echo "错误：配对码 SS2022 密钥无效" >&2; return 1; }
   valid_wg_key "$decoded_public_key" || { echo "错误：配对码 VPS WireGuard 公钥无效" >&2; return 1; }
 
@@ -270,6 +294,8 @@ load_pair_code() {
   PUBLIC_SS_ENABLED="$decoded_public_ss"
   REMOTE_SSH_ENABLED="$decoded_remote_ssh"
   HOME_SSH_PORT="$decoded_home_ssh_port"
+  REMOTE_SSH_AUTH="$decoded_remote_ssh_auth"
+  REMOTE_SSH_PUBLIC_KEY="$decoded_ssh_public_key"
   REMOTE_SSH_CONFIGURED="1"
   SS_PASSWORD="$decoded_password"
   PAIR_PEER_PUBLIC_KEY="$decoded_public_key"
@@ -293,6 +319,8 @@ MODE=$MODE
 PUBLIC_SS_ENABLED=$PUBLIC_SS_ENABLED
 REMOTE_SSH_ENABLED=$REMOTE_SSH_ENABLED
 HOME_SSH_PORT=$HOME_SSH_PORT
+REMOTE_SSH_AUTH=$REMOTE_SSH_AUTH
+REMOTE_SSH_PUBLIC_KEY_B64=$(encode "$REMOTE_SSH_PUBLIC_KEY")
 SS_PASSWORD=$SS_PASSWORD
 VPS_PUBLIC_KEY=$local_public_key
 EOF
@@ -538,11 +566,51 @@ MODE=$MODE
 PUBLIC_SS_ENABLED=$PUBLIC_SS_ENABLED
 REMOTE_SSH_ENABLED=$REMOTE_SSH_ENABLED
 HOME_SSH_PORT=$HOME_SSH_PORT
+REMOTE_SSH_AUTH=$REMOTE_SSH_AUTH
+HOME_SSH_IDENTITY=$HOME_SSH_IDENTITY
 HOME_BACKEND=$HOME_BACKEND
 VPS_SS_PORT=$VPS_SS_PORT
 HOME_SS_PORT=$HOME_SS_PORT
 EOF
   chmod 600 "$state_file"
+}
+
+prepare_remote_ssh_key() {
+  local ssh_dir
+  [[ "$FULL_STACK" == "1" && "$ROLE" == "vps" && "$REMOTE_SSH_ENABLED" == "1" && "$REMOTE_SSH_AUTH" == "key" ]] || return 0
+  command -v ssh-keygen >/dev/null 2>&1 || {
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update >/dev/null
+    apt-get install -y openssh-client >/dev/null
+  }
+  ssh_dir="/etc/wg-home-exit/ssh"
+  HOME_SSH_IDENTITY="$ssh_dir/${NODE_ID}_ed25519"
+  install -d -m 700 "$ssh_dir"
+  if [[ ! -s "$HOME_SSH_IDENTITY" ]]; then
+    ssh-keygen -q -t ed25519 -N '' -C "volwg-$NODE_ID" -f "$HOME_SSH_IDENTITY"
+  fi
+  ssh-keygen -y -f "$HOME_SSH_IDENTITY" >"$HOME_SSH_IDENTITY.pub"
+  chmod 600 "$HOME_SSH_IDENTITY"
+  chmod 644 "$HOME_SSH_IDENTITY.pub"
+  REMOTE_SSH_PUBLIC_KEY="$(<"$HOME_SSH_IDENTITY.pub") volwg-$NODE_ID"
+  valid_ssh_public_key "$REMOTE_SSH_PUBLIC_KEY" || die "生成的线路 SSH 公钥无效"
+}
+
+install_remote_ssh_public_key() {
+  local auth_file auth_dir
+  [[ "$FULL_STACK" == "1" && "$ROLE" == "home" && "$REMOTE_SSH_ENABLED" == "1" && "$REMOTE_SSH_AUTH" == "key" ]] || return 0
+  valid_ssh_public_key "$REMOTE_SSH_PUBLIC_KEY" || die "缺少有效的 VPS 线路 SSH 公钥"
+  if [[ "$SYSTEM_KIND" == "openwrt" ]]; then
+    auth_dir="/etc/dropbear"
+    auth_file="$auth_dir/authorized_keys"
+  else
+    auth_dir="/root/.ssh"
+    auth_file="$auth_dir/authorized_keys"
+  fi
+  install -d -m 700 "$auth_dir"
+  touch "$auth_file"
+  chmod 600 "$auth_file"
+  grep -qxF "$REMOTE_SSH_PUBLIC_KEY" "$auth_file" 2>/dev/null || printf '%s\n' "$REMOTE_SSH_PUBLIC_KEY" >>"$auth_file"
 }
 
 find_working_ssserver() {
@@ -899,6 +967,8 @@ MODE=$MODE
 PUBLIC_SS_ENABLED=$PUBLIC_SS_ENABLED
 REMOTE_SSH_ENABLED=$REMOTE_SSH_ENABLED
 HOME_SSH_PORT=$HOME_SSH_PORT
+REMOTE_SSH_AUTH=$REMOTE_SSH_AUTH
+HOME_SSH_IDENTITY=$HOME_SSH_IDENTITY
 HOME_BACKEND=$HOME_BACKEND
 WG_INTERFACE=$WG_IFACE
 WG_PORT=$VPS_WG_PORT
@@ -965,6 +1035,8 @@ while (($#)); do
       shift 2
       ;;
     --home-ssh-port) HOME_SSH_PORT="${2:-}"; REMOTE_SSH_CONFIGURED="1"; shift 2 ;;
+    --remote-ssh-auth) REMOTE_SSH_AUTH="${2:-}"; REMOTE_SSH_CONFIGURED="1"; shift 2 ;;
+    --remote-ssh-public-key) REMOTE_SSH_PUBLIC_KEY="${2:-}"; REMOTE_SSH_CONFIGURED="1"; shift 2 ;;
     --mode) MODE="${2:-}"; shift 2 ;;
     --replace) REPLACE_NODE="1"; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -1197,10 +1269,22 @@ if [[ "$FULL_STACK" == "1" ]]; then
       2)
         REMOTE_SSH_ENABLED="1"
         HOME_SSH_PORT="$(prompt_default "家宽机实际 SSH 监听端口（不是 FRP 外部端口）" "$HOME_SSH_PORT")"
+        echo "SSH 登录认证："
+        echo "  1) 线路专用密钥（推荐；私钥只保存在 VPS）"
+        echo "  2) 家宽机 root 密码或系统现有 SSH 配置"
+        read -r -p "请选择 [1-2，默认 1]：" remote_ssh_auth_choice
+        case "${remote_ssh_auth_choice:-1}" in
+          1) REMOTE_SSH_AUTH="key" ;;
+          2) REMOTE_SSH_AUTH="password" ;;
+          *) die "SSH 认证方式选择无效" ;;
+        esac
         ;;
       *) die "隧道内 SSH 选择无效" ;;
     esac
     REMOTE_SSH_CONFIGURED="1"
+  fi
+  if [[ "$ROLE" == "home" && "$PAIR_CODE_LOADED" != "1" && "$REMOTE_SSH_ENABLED" == "1" && "$REMOTE_SSH_AUTH" == "key" && -z "$REMOTE_SSH_PUBLIC_KEY" ]]; then
+    REMOTE_SSH_PUBLIC_KEY="$(prompt_required "粘贴 VPS 窗口显示的线路 SSH 公钥")"
   fi
 else
   WG_PREFIX="$(prompt_default "WireGuard 网段前缀" "$WG_PREFIX")"
@@ -1219,6 +1303,10 @@ if [[ "$FULL_STACK" == "1" ]]; then
   valid_port "$HOME_SS_PORT" || die "家宽机 SS 端口无效"
   [[ "$REMOTE_SSH_ENABLED" == "0" || "$REMOTE_SSH_ENABLED" == "1" ]] || die "隧道 SSH 开关无效"
   valid_port "$HOME_SSH_PORT" || die "家宽机 SSH 端口无效"
+  [[ "$REMOTE_SSH_AUTH" == "key" || "$REMOTE_SSH_AUTH" == "password" ]] || die "SSH 认证方式必须是 key 或 password"
+  if [[ "$ROLE" == "home" && "$REMOTE_SSH_ENABLED" == "1" && "$REMOTE_SSH_AUTH" == "key" ]]; then
+    valid_ssh_public_key "$REMOTE_SSH_PUBLIC_KEY" || die "线路 SSH 公钥无效"
+  fi
 fi
 
 select_available_wg_prefix
@@ -1227,6 +1315,8 @@ select_available_local_ports
 if [[ "$FULL_STACK" == "1" && "$ROLE" == "vps" && -z "$SS_PASSWORD" ]]; then
   SS_PASSWORD="$(dd if=/dev/urandom bs=16 count=1 2>/dev/null | base64_encode_stream | tr -d '\r\n')"
 fi
+
+prepare_remote_ssh_key
 
 check_network_collision
 
@@ -1250,6 +1340,10 @@ if [[ "$FULL_STACK" == "1" && "$ROLE" == "vps" ]]; then
   echo "  VPS 公网 SS 端口：$VPS_SS_PORT"
   echo "  家宽 SS 端口：$HOME_SS_PORT"
   echo "  SS2022 AES-128 密钥：$SS_PASSWORD"
+  if [[ "$REMOTE_SSH_ENABLED" == "1" && "$REMOTE_SSH_AUTH" == "key" ]]; then
+    echo "  线路 SSH 公钥（只把公钥交给家宽机）："
+    echo "$REMOTE_SSH_PUBLIC_KEY"
+  fi
   echo "密钥只在自己的两个 SSH 窗口间复制，不要公开。"
   echo
   echo "VPS 一行配对码（推荐整行复制到家宽窗口）："
@@ -1310,7 +1404,7 @@ if [[ "$FULL_STACK" == "1" ]]; then
     echo "  公网 SS：$VPS_ENDPOINT:$VPS_SS_PORT"
   fi
   if [[ "$REMOTE_SSH_ENABLED" == "1" ]]; then
-    echo "  隧道内 SSH：开启，root@$WG_PREFIX.2:$HOME_SSH_PORT"
+    echo "  隧道内 SSH：开启，root@$WG_PREFIX.2:$HOME_SSH_PORT（认证：$REMOTE_SSH_AUTH）"
   else
     echo "  隧道内 SSH：关闭（默认）"
   fi
@@ -1460,6 +1554,8 @@ EOF
   fi
 fi
 
+install_remote_ssh_public_key
+
 save_metadata
 
 if [[ "$FULL_STACK" == "1" ]]; then
@@ -1509,7 +1605,12 @@ if [[ "$FULL_STACK" == "1" ]]; then
   fi
   if [[ "$REMOTE_SSH_ENABLED" == "1" ]]; then
     echo "隧道内 SSH 已开启：volwg ssh $NODE_ID"
-    echo "直接连接：ssh -p $HOME_SSH_PORT root@$WG_PREFIX.2"
+    if [[ "$ROLE" == "vps" && "$REMOTE_SSH_AUTH" == "key" ]]; then
+      echo "线路 SSH 私钥：$HOME_SSH_IDENTITY"
+      echo "直接连接：ssh -i $HOME_SSH_IDENTITY -p $HOME_SSH_PORT root@$WG_PREFIX.2"
+    else
+      echo "直接连接：ssh -p $HOME_SSH_PORT root@$WG_PREFIX.2"
+    fi
   else
     echo "隧道内 SSH：关闭（默认）"
   fi
