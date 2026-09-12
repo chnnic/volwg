@@ -65,24 +65,36 @@ Debian LXC 可以作为家宽端或中转端使用，但容器必须拥有 `NET_
 
 Debian 11 安装 ss-rust 时使用 musl 静态构建，不依赖较新的 glibc。脚本在替换程序和创建服务前会先运行 `ssserver --version` 自检；检测到旧二进制无法运行时会自动替换。
 
-## OpenWrt 双 WAN/5G 自动切换
+## OpenWrt 换 IP 与双 WAN/5G 自动恢复
 
-OpenWrt/ImmortalWrt 家宽机部署线路时，会自动为每条线路开启 WireGuard endpoint 的 WAN 跟随服务。它按系统默认路由的 metric 选择当前优先级最高且物理链路在线的出口：网线 WAN 可用时走网线，网线断开后切到 5G/备用 WAN，网线恢复后再自动切回。普通上网已经切换出口、但 WireGuard 仍停留在安装时旧出口的问题也会被自动纠正。每次出口变化时只重建对应节点的 WireGuard 接口，刷新旧 UDP socket、NAT 映射与握手，避免路由已经切换但隧道仍大量丢包；不会重启整个 OpenWrt 网络或影响其他节点。
+OpenWrt/ImmortalWrt 家宽机部署线路时，默认开启每条线路的 WAN/IP 自动恢复服务。它按系统默认路由的 metric 选择物理链路在线的首选出口，检测网卡、网关和本机源地址变化，并修正 VPS 的 endpoint 路由。即使运营商仅更换光猫/CGNAT 的公网 IP、本机地址完全不变，也会通过主动发送经认证的 WireGuard 数据包，让 VPS 学习新的公网 IP 和 NAT 端口；无需查询第三方公网 IP 服务、重新配对或更换 SS 链接。[WireGuard 漫游原理](https://www.wireguard.com/#cryptokey-routing)
+
+- 默认每 3 秒从 WireGuard 接口探测 VPS 的隧道地址，保活间隔缩短为 5 秒；间隔不等于恢复时限，仍取决于 WAN 联网、丢包和握手情况。
+- 修正路由后优先保留仍可通信的会话。连续 3 次没有探测响应且没有隧道接收数据，才在已确认探测可用的线路上刷新对应 WG 接口；出口变化也可触发该恢复流程。每条线路的恢复操作至少间隔 60 秒，避免短时抖动造成重启循环。
+- 从未收到 Ping 应答且出口未变时，只做主动探测和保活，不把未知 ICMP 防火墙策略误判为故障。状态界面会显示“探测无回包”；VPS 应允许从该 WG 接口 Ping 自己的隧道地址。
+- 用户手动停用的 WG 接口不会被守护进程重新打开；运行状态保存在 RAM 中，不持续写入路由器闪存。
+
+新网络可用后通常可由下一轮主动探测/保活恢复，卡住的会话再由故障检测自动处理；不是固定 3 秒恢复的保证。公网出口 IP 改变后，已建立的网页、下载等 TCP 连接仍可能中断，应用需要重试，但不需要用户重新配对或重建 SS 节点。它也不会检测“网线有信号但上游断网”来替代多 WAN 管理器；此类故障需由系统先切换默认出口。
 
 查看指定线路当前使用的出口：
 
     volwg wan-follow status --node line1
 
-为升级前已经创建的 OpenWrt 线路补开此功能：
+v1.4.22 起，升级会自动刷新已启用的服务，并为仍在运行、从未安装自动恢复的旧 OpenWrt 家宽线路补开此功能：
 
     volwg update
+
+此前主动关闭的自动恢复服务会保持关闭。需要重新开启某一条时：
+
     volwg wan-follow enable --node line1
+
+旧线路的 5 秒保活由守护服务在运行时应用，开机后会自动再次应用，不会为了升级保活而提交或覆盖已有的 UCI 网络配置。新建线路则直接写入 5 秒保活配置。
 
 关闭自动跟随但保留配置：
 
     volwg wan-follow disable --node line1
 
-每条线路拥有独立的 `wgh-wan-节点ID` 服务。删除指定线路或执行 `volwg purge` 时，对应服务与配置会一并停止并归档，不影响其他节点。
+每条线路拥有独立的 `wgh-wan-节点ID` 服务。删除指定线路或执行 `volwg purge` 时，对应服务与配置会一并停止并归档。多条线路独立恢复，不会重启整个网络。Debian/Ubuntu 新建家宽线路同样使用 5 秒保活；此节的主动探测、WAN 跟随与故障重建服务目前仅支持 OpenWrt/ImmortalWrt。
 
 ## 隧道内 SSH（默认关闭）
 
@@ -406,7 +418,7 @@ SSH 可能短暂断开，重新连接后使用以下命令检查：
 - VPS 公网 SS 端口：31000/TCP+UDP（默认开放，可关闭）
 - 家宽机 SS2022 服务端口：31000/TCP+UDP
 - SS2022 加密：2022-blake3-aes-128-gcm（16 字节密钥）
-- PersistentKeepalive：25 秒
+- PersistentKeepalive：5 秒（家宽端）
 
 可通过 `--vps-wg-port`、`--home-wg-port`、`--vps-ss-port`、`--home-ss-port` 分别指定两端端口。兼容参数 `--wg-port` 和 `--ss-port` 会把两端设置成同一个值。`--public-ss on|off` 控制是否创建公网 DNAT/SNAT，默认 `on`。脚本会检查已登记节点的 VPS 监听端口和网段冲突；同一节点 ID 默认禁止覆盖，确认需要更新时使用 `--replace`。
 
@@ -483,7 +495,7 @@ SS2022、SSH 私钥和 WireGuard 私钥均属于敏感信息，不要公开。
 - wg-home-manager.sh：安装到 VPS 的多线路查看和 SS 链接管理后台。
 - wg-home-remove.sh：按节点停止服务并归档删除 VPS/家宽端配置。
 - wg-home-purge.sh：清空本机全部 VolWG 线路、旧版配置和活动记录。
-- wg-home-wan-follow.sh：OpenWrt WireGuard endpoint 的有线 WAN/5G 自动跟随服务。
+- wg-home-wan-follow.sh：OpenWrt WireGuard 的 WAN 跟随、主动探测和换 IP 自动恢复服务。
 
 ## 注意
 

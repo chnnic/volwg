@@ -131,6 +131,9 @@ for node_id in "${NODE_IDS[@]}"; do
     fi
     archive_item "/etc/init.d/wgh-wan-$node_id"
     archive_item "/etc/wg-home-exit/wan-follow/$node_id.conf"
+    archive_item "/var/run/volwg-wan/$node_id.status"
+    archive_item "/var/run/volwg-wan/$node_id.status.tmp"
+    archive_item "/var/run/volwg-wan/$node_id.lock"
     for init_name in "ssrust-wgh-$node_id" "xray-wgh-$node_id"; do
       if [[ -x "/etc/init.d/$init_name" ]]; then
         "/etc/init.d/$init_name" stop >/dev/null 2>&1 || true

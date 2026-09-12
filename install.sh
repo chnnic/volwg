@@ -46,6 +46,10 @@ download "$REPO_RAW_URL/wg-home-purge.sh" "$TMP_DIR/wg-home-purge.sh"
 download "$REPO_RAW_URL/wg-home-wan-follow.sh" "$TMP_DIR/wg-home-wan-follow.sh"
 download "$REPO_RAW_URL/volwg" "$TMP_DIR/volwg"
 download "$REPO_RAW_URL/VERSION" "$TMP_DIR/VERSION"
+# 所有组件通过语法检查再替换，避免带入无法启动的脚本。
+for component in "$TMP_DIR"/*.sh "$TMP_DIR/volwg"; do
+  bash -n "$component"
+done
 chmod 700 "$TMP_DIR/wg-home-deploy.sh" "$TMP_DIR/wg-home-key-wizard.sh" "$TMP_DIR/wg-home-manager.sh" "$TMP_DIR/wg-home-remove.sh" "$TMP_DIR/wg-home-purge.sh" "$TMP_DIR/wg-home-wan-follow.sh"
 chmod 755 "$TMP_DIR/volwg"
 
@@ -77,6 +81,11 @@ atomic_install "$TMP_DIR/VERSION" "$INSTALL_LIB_DIR/VERSION" 644
 atomic_install "$TMP_DIR/volwg" "$INSTALL_BIN_DIR/volwg" 755
 
 echo "VolWG 已安装：$INSTALL_BIN_DIR/volwg"
+if [[ "$(id -u)" == 0 && -f /etc/openwrt_release && "$INSTALL_LIB_DIR" == /usr/lib/volwg ]]; then
+  if ! bash "$INSTALL_LIB_DIR/wg-home-wan-follow.sh" refresh-all; then
+    echo "提示：部分家宽线路的自动恢复未能刷新，请运行 volwg wan-follow status --node 节点ID 检查。" >&2
+  fi
+fi
 if [[ ":$PATH:" != *":$INSTALL_BIN_DIR:"* ]]; then
   if [[ "$(id -u)" != "0" ]]; then
     case "${SHELL:-}" in

@@ -877,7 +877,7 @@ PrivateKey = __HOME_PRIVATE_KEY__
 PublicKey = $vps_public_key
 Endpoint = $VPS_PUBLIC_HOST:$VPS_WG_PORT
 AllowedIPs = $WG_PREFIX.1/32
-PersistentKeepalive = 25
+PersistentKeepalive = 5
 EOF
 chmod 600 "$TMP_DIR/home-wg.conf"
 
@@ -1025,7 +1025,7 @@ uci set 'network.${WG_IFACE}_vps=wireguard_$WG_IFACE'
 uci set 'network.${WG_IFACE}_vps.public_key=$vps_public_key'
 uci set 'network.${WG_IFACE}_vps.endpoint_host=$VPS_PUBLIC_HOST'
 uci set 'network.${WG_IFACE}_vps.endpoint_port=$VPS_WG_PORT'
-uci set 'network.${WG_IFACE}_vps.persistent_keepalive=25'
+uci set 'network.${WG_IFACE}_vps.persistent_keepalive=5'
 uci set 'network.${WG_IFACE}_vps.route_allowed_ips=1'
 uci add_list 'network.${WG_IFACE}_vps.allowed_ips=$WG_PREFIX.1/32'
 uci commit network

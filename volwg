@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 REPO_RAW_URL="https://raw.githubusercontent.com/chnnic/volwg/main"
-BUILTIN_VERSION="1.4.21"
+BUILTIN_VERSION="1.4.22"
 
 find_lib_dir() {
   local launcher_dir user_data_dir
@@ -318,7 +318,7 @@ VolWG 命令：
   volwg diagnose ID        诊断指定线路的 WG、SS、转发和 SSH
   volwg ssh ID             从 VPS 通过 WireGuard 进入家宽机 SSH
   volwg wan-follow enable --node ID
-                            OpenWrt 家宽机自动跟随 WAN/5G 默认出口
+                            OpenWrt 家宽机自动跟随 WAN/5G，换 IP 后自动恢复
   volwg wan-follow status --node ID
                             查看 WireGuard 当前使用的上游出口
   volwg key [参数]         仅 WireGuard：双 SSH 窗口公钥向导

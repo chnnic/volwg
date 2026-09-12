@@ -1467,7 +1467,7 @@ else
     uci set "network.${WG_IFACE}_vps.public_key=$peer_public_key"
     uci set "network.${WG_IFACE}_vps.endpoint_host=$VPS_ENDPOINT"
     uci set "network.${WG_IFACE}_vps.endpoint_port=$VPS_WG_PORT"
-    uci set "network.${WG_IFACE}_vps.persistent_keepalive=25"
+    uci set "network.${WG_IFACE}_vps.persistent_keepalive=5"
     uci set "network.${WG_IFACE}_vps.route_allowed_ips=1"
     uci add_list "network.${WG_IFACE}_vps.allowed_ips=$WG_PREFIX.1/32"
     uci -q delete "firewall.fw_$NODE_ID" || true
@@ -1554,7 +1554,7 @@ PrivateKey = $private_key
 PublicKey = $peer_public_key
 Endpoint = $VPS_ENDPOINT:$VPS_WG_PORT
 AllowedIPs = $WG_PREFIX.1/32
-PersistentKeepalive = 25
+PersistentKeepalive = 5
 EOF
     chmod 600 "$WG_CONFIG"
     systemctl enable "wg-quick@$WG_IFACE.service" >/dev/null
