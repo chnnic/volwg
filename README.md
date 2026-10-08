@@ -200,14 +200,14 @@ OpenWrt 如果原有 Dropbear 只绑定 LAN 接口，即使相同端口已被占
 “新建线路与配对”子菜单：
 
     1) 双 SSH 窗口完整部署（推荐）
-       家宽机主动连接 VPS；无需公网 IP，也无需两端互相 SSH
+       VPS 先配置并生成家宽一键安装命令；家宽机主动连接 VPS，无需公网 IP
     2) 仅 WireGuard：当前机器是 VPS
     3) 仅 WireGuard：当前机器是家宽机
     4) 控制端远程全自动部署
        仅适合当前控制机能分别 SSH 到 VPS 和家宽机
     0) 返回主菜单
 
-默认推荐“双 SSH 窗口完整部署”。分别在 VPS 和家宽机的 SSH 窗口运行 `volwg`，选择当前机器角色；两端各自只配置本机。家宽机主动连接 VPS，因此不需要公网 IP、FRP、端口映射，也不需要让 VPS 登录家宽机。两个窗口只复制 WireGuard 公钥和向导生成的 SS2022 AES-128 密钥，SSH 私钥不会交换。
+默认推荐“双 SSH 窗口完整部署”。先在 VPS 运行 `volwg` 完成配置，再把 VPS 输出的一键命令粘贴到家宽机执行；也可以在两端分别运行 `volwg` 并选择当前机器角色。两端各自只配置本机。家宽机主动连接 VPS，因此不需要公网 IP、FRP、端口映射，也不需要让 VPS 登录家宽机。两个窗口只复制 WireGuard 公钥和向导生成的 SS2022 AES-128 密钥，SSH 私钥不会交换。
 
 也可以直接在两端分别运行：
 
@@ -303,9 +303,20 @@ VPS 与家宽机可以使用不同 SSH 私钥。交互向导会分别询问两�
     1) 双 SSH 窗口完整部署
     1) 当前窗口是公网/优化 VPS
 
-VPS 窗口会显示一条 `VOLWG1...` 开头的一行配对码，并等待家宽公钥。配对码包含本次线路的 WireGuard 公钥、endpoint、最终端口、网段、SS 后端和 SS2022 AES-128 密钥，只应在自己的两个 SSH 窗口间复制。
+VPS 完成本机设置后，会输出一条**家宽机一键安装命令**，并等待家宽公钥。家宽机不需要事先安装 VolWG：把整行命令粘贴到家宽机的 root SSH 窗口执行即可（Debian/Ubuntu 普通用户先 `sudo -i`）。命令形如：
 
-再在家宽机窗口选择：
+    command -v bash >/dev/null 2>&1 || { opkg update && opkg install bash; }; VOLWG_PAIR_CODE='VOLWG1...' VOLWG_REF='v1.4.24' bash -c "$(curl -fsSL https://raw.githubusercontent.com/chnnic/volwg/v1.4.24/install.sh || wget -qO- …)" volwg pair --role home --yes
+
+它会：
+
+1. OpenWrt 缺少 bash 时先用 opkg 安装；
+2. 安装与 VPS 相同版本的 VolWG（curl 或 wget 均可）；
+3. 读取命令中的配对码，自动安装 WireGuard、SS 服务端和换 IP 自动恢复，不再逐项询问；
+4. 结束时框出家宽公钥，复制这一行粘贴回仍在等待的 VPS 窗口，线路即完成。
+
+WireGuard 私钥始终在各自机器生成，不会出现在命令中，因此仍保留“复制回 VPS”这一步。命令中的配对码包含本次线路的 WireGuard 公钥、endpoint、最终端口、网段、SS 后端和 SS2022 AES-128 密钥，等同于凭据：只在自己的 SSH 窗口使用，不要发到聊天或工单中。配对码以环境变量传入，不出现在进程参数列表；但会留在家宽机的 shell 历史中，如有需要可事后清理。
+
+家宽机已经安装 VolWG 时，也可以使用 VPS 同时显示的 `VOLWG1...` 一行配对码，在家宽机窗口选择：
 
     2) 新建线路与配对
     1) 双 SSH 窗口完整部署
@@ -325,6 +336,7 @@ VPS 窗口会显示一条 `VOLWG1...` 开头的一行配对码，并等待家宽
 
     sudo volwg pair --role vps
     sudo volwg pair --role home
+    sudo volwg pair --role home --code VOLWG1...
 
 ## 双 SSH 窗口仅 WireGuard
 

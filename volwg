@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 REPO_RAW_URL="https://raw.githubusercontent.com/chnnic/volwg/main"
-BUILTIN_VERSION="1.4.23"
+BUILTIN_VERSION="1.4.24"
 
 find_lib_dir() {
   local launcher_dir user_data_dir
@@ -207,7 +207,7 @@ deployment_menu() {
     print_header
     print_menu_title "主菜单 > 新建线路与配对"
     echo "  1) 双 SSH 窗口完整部署（推荐）"
-    echo "     家宽机主动连接 VPS；无需公网 IP，也无需两端互相 SSH"
+    echo "     VPS 先配置并生成家宽一键安装命令；家宽机主动连接 VPS，无需公网 IP"
     echo "  2) 仅 WireGuard：当前机器是 VPS"
     echo "  3) 仅 WireGuard：当前机器是家宽机"
     echo "  4) 控制端远程全自动部署"
@@ -219,8 +219,9 @@ deployment_menu() {
         clear_screen
         print_header
         print_menu_title "主菜单 > 新建线路与配对 > 双窗口完整部署"
-        echo "请在 VPS 和家宽机两个 SSH 窗口都安装 VolWG。"
-        echo "两端各自配置本机，只交换 WireGuard 公钥和 SS2022 密钥。"
+        echo "先在 VPS 窗口完成配置，VPS 会输出一条家宽机一键安装命令。"
+        echo "家宽机粘贴执行即可自动安装并配置，最后把显示的家宽公钥复制回 VPS。"
+        echo "两端各自配置本机，不互相 SSH，WireGuard 私钥不离开本机。"
         echo
         echo "  1) 当前窗口是公网/优化 VPS"
         echo "  2) 当前窗口是家宽机"
@@ -312,6 +313,7 @@ show_help() {
 VolWG 命令：
   volwg                    打开多级引导界面
   volwg pair [参数]        双 SSH 窗口完整部署；在两端各自执行
+  volwg pair --role vps    VPS 先配置，并输出家宽机一键安装命令
   volwg deploy [参数]      控制端远程部署；要求能 SSH 到两端
   volwg manager            打开本机线路管理界面
   volwg manager links      查看本机保存的全部 SS 链接

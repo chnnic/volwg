@@ -32,6 +32,10 @@ REPLY_PEER_KEY=""
 REPLY_HOME_SS_PORT=""
 CLI_SET=""
 declare -a OWN_PORTS=()
+ASSUME_YES="0"
+# 一键命令通过环境变量传入配对码（不出现在 ps 参数中）；读取后立即清除，避免传给子进程。
+PAIR_CODE_ARG="${VOLWG_PAIR_CODE:-}"
+unset VOLWG_PAIR_CODE
 
 usage() {
   cat <<'EOF'
@@ -81,6 +85,8 @@ WireGuard 接口、密钥和配置，默认不会覆盖其他节点。占用的�
                           手动模式使用的 VPS 线路 SSH 公钥
   --mode relay|direct     默认推荐公网或私网入口，默认 relay
   --replace               明确替换相同节点 ID；替换前自动备份
+  --code VOLWG1...        家宽机直接使用 VPS 配对码（一键命令自动传入）
+  --yes                   跳过最终 yes 确认（一键命令使用）
   -h, --help
 
 说明：pair 完整模式在两台机器各自本地安装和配置，不需要两端互相 SSH。
@@ -227,6 +233,22 @@ parse_peer_reply() {
     REPLY_HOME_SS_PORT="$((10#${extra#ss=}))"
   fi
   REPLY_PEER_KEY="$key"
+}
+
+home_install_command() {
+  # 生成家宽机一键命令：按需补装 bash（OpenWrt 默认没有），再安装与 VPS 相同版本的 VolWG，
+  # 并以环境变量传入配对码直接进入家宽配置。配对码含 SS 密钥，只应在自己的 SSH 窗口使用。
+  local code="$1" version ref url
+  version="$(cat "$SCRIPT_DIR/VERSION" 2>/dev/null || true)"
+  if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    ref="v$version"
+  else
+    ref="main"
+  fi
+  url="https://raw.githubusercontent.com/chnnic/volwg/$ref/install.sh"
+  printf '%s' "command -v bash >/dev/null 2>&1 || { opkg update && opkg install bash; }; "
+  printf "VOLWG_PAIR_CODE='%s' VOLWG_REF='%s' bash -c \"\$(curl -fsSL %s || wget -qO- %s)\" volwg pair --role home --yes" \
+    "$code" "$ref" "$url" "$url"
 }
 
 base64_encode_stream() {
@@ -1170,6 +1192,8 @@ while (($#)); do
     --remote-ssh-public-key) REMOTE_SSH_PUBLIC_KEY="${2:-}"; REMOTE_SSH_CONFIGURED="1"; shift 2 ;;
     --mode) MODE="${2:-}"; shift 2 ;;
     --replace) REPLACE_NODE="1"; shift ;;
+    --code) PAIR_CODE_ARG="${2:-}"; shift 2 ;;
+    --yes) ASSUME_YES="1"; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "未知参数：$1" ;;
   esac
@@ -1191,6 +1215,7 @@ fi
 [[ "$FULL_STACK" == "0" || "$FULL_STACK" == "1" ]] || die "完整部署模式无效"
 [[ "$HOME_BACKEND" == "ss-rust" || "$HOME_BACKEND" == "xray" ]] || die "--home-backend 必须是 ss-rust 或 xray"
 [[ "$MODE" == "relay" || "$MODE" == "direct" ]] || die "--mode 必须是 relay 或 direct"
+[[ -z "$PAIR_CODE_ARG" || ( "$FULL_STACK" == "1" && "$ROLE" == "home" ) ]] || die "--code 只用于家宽机完整部署（volwg pair --role home）"
 [[ -z "$DISPLAY_NAME" ]] || valid_display_name "$DISPLAY_NAME" || die "--name 不能含换行等控制字符，且不超过 128 字节"
 if [[ -n "$VPS_ENDPOINT" ]] && ! valid_endpoint_host "$VPS_ENDPOINT"; then
   endpoint_host_hint "$VPS_ENDPOINT"
@@ -1231,7 +1256,11 @@ else
 fi
 [[ "$ROLE" != "vps" || "$SYSTEM_KIND" == "linux" ]] || die "VPS 角色仅支持 Debian/Ubuntu"
 
-if [[ "$FULL_STACK" == "1" && "$ROLE" == "home" ]]; then
+if [[ "$FULL_STACK" == "1" && "$ROLE" == "home" && -n "$PAIR_CODE_ARG" ]]; then
+  load_pair_code "$PAIR_CODE_ARG" || die "一键命令中的配对码无效；请回到 VPS 窗口重新复制完整命令"
+  PAIR_CODE_ARG=""
+  echo "配对码读取成功：$DISPLAY_NAME ($NODE_ID)"
+elif [[ "$FULL_STACK" == "1" && "$ROLE" == "home" ]]; then
   echo "请先在 VPS 窗口运行到显示配对码。"
   while true; do
     read -r -p "粘贴 VPS 一行配对码（留空改为逐项手动填写）：" pair_code_answer
@@ -1471,7 +1500,7 @@ fi
 echo "$local_public_key$home_reply_suffix"
 if [[ "$FULL_STACK" == "1" && "$ROLE" == "vps" ]]; then
   echo
-  echo "请把下面参数复制到家宽窗口："
+  echo "家宽窗口逐项手动填写时使用的参数："
   echo "  WireGuard 网段：$WG_PREFIX"
   echo "  VPS endpoint：$VPS_ENDPOINT"
   echo "  VPS WireGuard 端口：$VPS_WG_PORT"
@@ -1485,8 +1514,15 @@ if [[ "$FULL_STACK" == "1" && "$ROLE" == "vps" ]]; then
   fi
   echo "密钥只在自己的两个 SSH 窗口间复制，不要公开。"
   echo
-  echo "VPS 一行配对码（推荐整行复制到家宽窗口）："
-  make_pair_code
+  pair_code="$(make_pair_code)"
+  echo "【推荐】家宽机一键安装命令：复制下面整行，粘贴到家宽机 root SSH 窗口执行"
+  echo "（自动安装 VolWG 并按本线路参数配置；家宽机无需事先安装，Debian 普通用户请先 sudo -i）"
+  echo
+  home_install_command "$pair_code"
+  echo
+  echo
+  echo "家宽机已安装 VolWG 时，也可以在其配对向导中粘贴这一行配对码："
+  echo "$pair_code"
   echo
 elif [[ "$FULL_STACK" == "1" && "$ROLE" == "home" && "$PAIR_CODE_LOADED" == "1" ]]; then
   echo
@@ -1502,7 +1538,7 @@ fi
 echo "============================================================"
 echo
 
-if [[ "$FULL_STACK" == "1" && "$ROLE" == "home" && "$PAIR_CODE_LOADED" == "1" && -t 0 ]]; then
+if [[ "$FULL_STACK" == "1" && "$ROLE" == "home" && "$PAIR_CODE_LOADED" == "1" && "$ASSUME_YES" != "1" && -t 0 ]]; then
   read -r -p "确认已复制家宽公钥，按 Enter 继续配置本机..." _
   echo
 fi
@@ -1573,8 +1609,12 @@ if [[ "$FULL_STACK" == "1" ]]; then
   fi
 fi
 echo "  其他节点不会被修改。"
-read -r -p "输入 yes 写入配置：" confirm
-[[ "$confirm" == "yes" ]] || die "用户取消"
+if [[ "$ASSUME_YES" == "1" ]]; then
+  echo "已通过 --yes 确认，开始写入配置。"
+else
+  read -r -p "输入 yes 写入配置：" confirm
+  [[ "$confirm" == "yes" ]] || die "用户取消"
+fi
 
 if [[ "$ROLE" == "vps" ]]; then
   if [[ "$FULL_STACK" == "1" ]]; then
@@ -1770,9 +1810,13 @@ if [[ "$FULL_STACK" == "1" ]]; then
     echo "SS2022 服务端已安装在本机（家宽机）：$HOME_BACKEND"
     if [[ "$PAIR_CODE_LOADED" == "1" ]]; then
       echo
-      echo "【VPS 端尚未完成时】复制下面家宽公钥到 VPS 窗口："
+      echo "============================================================"
+      echo "【最后一步：复制回 VPS】把下面整行粘贴到正在等待的 VPS 窗口："
+      echo
       echo "$local_public_key$home_reply_suffix"
+      echo
       echo "VPS 窗口粘贴并完成配置后，本线路才会握手成功。"
+      echo "============================================================"
     fi
   else
     echo "VPS 只运行 WireGuard + nftables；SS2022 服务端位于家宽机。"

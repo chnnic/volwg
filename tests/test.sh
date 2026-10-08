@@ -58,7 +58,7 @@ grep -Fq 'VPS 一行配对码' "$ROOT_DIR/wg-home-key-wizard.sh"
 grep -Fq '【必须复制回 VPS】家宽 WireGuard 公钥' "$ROOT_DIR/wg-home-key-wizard.sh"
 grep -Fq '确认已复制家宽公钥，按 Enter 继续配置本机' "$ROOT_DIR/wg-home-key-wizard.sh"
 grep -Fq '粘贴家宽机窗口标出的完整公钥' "$ROOT_DIR/wg-home-key-wizard.sh"
-grep -Fq '【VPS 端尚未完成时】复制下面家宽公钥到 VPS 窗口' "$ROOT_DIR/wg-home-key-wizard.sh"
+grep -Fq '【最后一步：复制回 VPS】把下面整行粘贴到正在等待的 VPS 窗口' "$ROOT_DIR/wg-home-key-wizard.sh"
 grep -Fq '建议节点 ID' "$ROOT_DIR/wg-home-key-wizard.sh"
 grep -Fq '请重新输入；线路显示名称稍后仍可使用大写字母和连字符' "$ROOT_DIR/wg-home-key-wizard.sh"
 grep -Fq '/etc/wg-home-exit/nodes/$candidate.conf' "$ROOT_DIR/wg-home-key-wizard.sh"
@@ -106,8 +106,8 @@ if grep -Fq 'tcp_probe "$home_ip"' <<<"$ssh_function"; then
 fi
 grep -Fq '0\\.0\\.0\\.0|$WG_PREFIX\\.2|\\*|::' "$ROOT_DIR/wg-home-key-wizard.sh"
 grep -Fq 'dropbear.volwg_$NODE_ID.PasswordAuth=off' "$ROOT_DIR/wg-home-key-wizard.sh"
-grep -Fq 'BUILTIN_VERSION="1.4.23"' "$ROOT_DIR/volwg"
-grep -Fxq '1.4.23' "$ROOT_DIR/VERSION"
+grep -Fq 'BUILTIN_VERSION="1.4.24"' "$ROOT_DIR/volwg"
+grep -Fxq '1.4.24' "$ROOT_DIR/VERSION"
 grep -Fq '自动让 WireGuard endpoint 跟随当前优先级最高' < <(bash "$ROOT_DIR/wg-home-wan-follow.sh" --help)
 grep -Fq 'interface_has_carrier' "$ROOT_DIR/wg-home-wan-follow.sh"
 grep -Fq 'ip -4 route replace "$endpoint_ip/32"' "$ROOT_DIR/wg-home-wan-follow.sh"
@@ -243,7 +243,29 @@ pair_functions="$(awk '/^while \(\(\$#\)\); do/{exit} {print}' "$ROOT_DIR/wg-hom
     "ssh-ed25519 DDDD volwg-test10" >"$auth_test"
   write_node_authorized_key "$auth_test" 'from="10.99.7.1" ssh-ed25519 CCCC volwg-test1'
   [[ "$(cat "$auth_test")" == $'ssh-ed25519 AAAA user@laptop\nssh-ed25519 DDDD volwg-test10\nfrom="10.99.7.1" ssh-ed25519 CCCC volwg-test1' ]]
+
+  # VPS 输出的家宽一键命令：POSIX sh 可解析，安装与 VPS 相同版本，并经环境变量传入配对码。
+  SCRIPT_DIR="$ROOT_DIR"
+  home_command="$(home_install_command "$pair_code")"
+  [[ "$home_command" != *$'\n'* ]]
+  sh -n -c "$home_command"
+  fake_bin="$TEST_DIR/fake-bin"
+  mkdir -p "$fake_bin"
+  # shellcheck disable=SC2016 # The fake installer expands variables when it runs.
+  printf '%s\n' '#!/bin/sh' \
+    "printf '%s\\n' 'printf \"ARGS=%s|\" \"\$0\" \"\$@\"; printf \"REF=%s\\\\n\" \"\$VOLWG_REF\"; printf \"CODE=%s\\\\n\" \"\$VOLWG_PAIR_CODE\"'" \
+    >"$fake_bin/curl"
+  chmod 755 "$fake_bin/curl"
+  home_run="$(PATH="$fake_bin:$PATH" sh -c "$home_command")"
+  grep -Fq 'ARGS=volwg|ARGS=pair|ARGS=--role|ARGS=home|ARGS=--yes|' <<<"$home_run"
+  grep -Fq -- "--yes|REF=v$(cat "$ROOT_DIR/VERSION")" <<<"$home_run"
+  grep -Fxq "CODE=$pair_code" <<<"$home_run"
 )
+code_role_output="$(bash "$ROOT_DIR/wg-home-key-wizard.sh" --full --role vps --code VOLWG1.x 2>&1 || true)"
+grep -Fq -- '--code 只用于家宽机完整部署' <<<"$code_role_output"
+grep -Fq -- '--code VOLWG1' < <(bash "$ROOT_DIR/wg-home-key-wizard.sh" --help)
+grep -Fq '【推荐】家宽机一键安装命令' "$ROOT_DIR/wg-home-key-wizard.sh"
+grep -Fq 'volwg pair --role vps    VPS 先配置' "$ROOT_DIR/volwg"
 
 deploy_functions="$(awk '/^valid_endpoint_host\(\) \{/,/^}/; /^valid_display_name\(\) \{/,/^}/' "$ROOT_DIR/wg-home-deploy.sh")"
 (
