@@ -88,7 +88,7 @@ if [[ -e /etc/wireguard/wg-home.conf ]] || ip link show wg-home >/dev/null 2>&1;
   echo "检测到旧版接口：wg-home"
 fi
 echo
-echo "将清理：VolWG 节点、服务、线路记录及旧版 wg-home。"
+echo "将清理：VolWG 节点、服务、线路记录、线路 SSH 公钥及旧版 wg-home。"
 echo "不会清理：wg-id 和其他非 VolWG WireGuard 接口。"
 if [[ "$UNINSTALL" == "1" ]]; then
   echo "VolWG 程序：同时卸载"
@@ -114,6 +114,22 @@ archive_item() {
   mkdir -p "$(dirname "$destination")"
   mv "$source" "$destination"
   ((archived_count++)) || true
+}
+
+remove_line_ssh_keys() {
+  # 清理所有 VolWG 线路公钥（注释为 volwg-<节点ID>）；与节点记录是否齐全无关。
+  local auth_file tmp_file pattern='[[:space:]]volwg-[a-z0-9][a-z0-9_]{0,7}[[:space:]]*$'
+  for auth_file in /etc/dropbear/authorized_keys /root/.ssh/authorized_keys; do
+    [[ -f "$auth_file" ]] || continue
+    grep -Eq "$pattern" "$auth_file" || continue
+    mkdir -p "$BACKUP_DIR$(dirname "$auth_file")"
+    cp -p "$auth_file" "$BACKUP_DIR$auth_file"
+    tmp_file="$(mktemp "$auth_file.volwg.XXXXXX")"
+    grep -Ev "$pattern" "$auth_file" >"$tmp_file" || true
+    cat "$tmp_file" >"$auth_file"
+    rm -f "$tmp_file"
+    ((archived_count++)) || true
+  done
 }
 
 stop_systemd() {
@@ -172,6 +188,8 @@ for node_id in "${NODE_IDS[@]}"; do
   archive_item "/etc/ss-rust-wg-home/$node_id"
   archive_item "/etc/xray-wg-home/$node_id"
 done
+
+remove_line_ssh_keys
 
 echo "正在清理旧版 wg-home..."
 if [[ "$SYSTEM_KIND" == "openwrt" ]]; then

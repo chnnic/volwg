@@ -27,6 +27,11 @@ SS_RUST_VERSION="v1.25.0"
 REPLACE_NODE="0"
 PAIR_CODE_LOADED="0"
 PAIR_PEER_PUBLIC_KEY=""
+PAIR_HOME_SS_PORT=""
+REPLY_PEER_KEY=""
+REPLY_HOME_SS_PORT=""
+CLI_SET=""
+declare -a OWN_PORTS=()
 
 usage() {
   cat <<'EOF'
@@ -155,6 +160,75 @@ valid_wg_prefix() {
   ((10#$first <= 255 && 10#$second <= 255 && 10#$third <= 255))
 }
 
+valid_display_name() {
+  # 名称会写入 WireGuard/UCI 配置；拒绝换行等控制字符，防止配对码注入配置行。
+  local LC_ALL=C name="$1"
+  [[ -n "$name" && ${#name} -le 128 ]] || return 1
+  [[ "$name" != *[$'\001'-$'\037'$'\177']* ]]
+}
+
+valid_endpoint_host() {
+  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,252}$ ]]
+}
+
+endpoint_host_hint() {
+  case "$1" in
+    *:*) echo "VPS 地址只填写 IPv4 或域名，不要包含端口；IPv6 暂不支持。" >&2 ;;
+    *) echo "VPS 地址只能包含字母、数字、点、连字符和下划线，例如 203.0.113.10 或 vps.example.com。" >&2 ;;
+  esac
+}
+
+prompt_endpoint_host() {
+  local prompt="$1" default_value="${2:-}" answer
+  while true; do
+    if [[ -n "$default_value" ]]; then
+      read -r -p "$prompt [$default_value]：" answer || die "输入已结束，未写入配置"
+      answer="${answer:-$default_value}"
+    else
+      read -r -p "${prompt}：" answer || die "输入已结束，未写入配置"
+    fi
+    if valid_endpoint_host "$answer"; then
+      printf '%s' "$answer"
+      return 0
+    fi
+    [[ -z "$answer" ]] || endpoint_host_hint "$answer"
+  done
+}
+
+prompt_display_name() {
+  local default_value="$1" answer
+  while true; do
+    read -r -p "线路显示名称（两个窗口建议相同） [$default_value]：" answer || die "输入已结束，未写入配置"
+    answer="${answer:-$default_value}"
+    if valid_display_name "$answer"; then
+      printf '%s' "$answer"
+      return 0
+    fi
+    echo "线路名称不能为空、不能含控制字符，且不超过 128 字节，请重新输入。" >&2
+  done
+}
+
+ssh_key_line_for_node() {
+  # 线路公钥最后一个字段固定为 volwg-<节点ID>，删除线路时据此精确清理。
+  local key="$1"
+  [[ "$key" =~ [[:space:]]volwg-${NODE_ID}$ ]] || key="$key volwg-$NODE_ID"
+  printf '%s' "$key"
+}
+
+parse_peer_reply() {
+  # 家宽回传：一行 WireGuard 公钥；家宽 SS 端口被顺延时追加 ss=端口。
+  local reply="$1" key="" extra="" rest=""
+  REPLY_PEER_KEY="" REPLY_HOME_SS_PORT=""
+  reply="${reply//$'\r'/}"
+  read -r key extra rest <<<"$reply"
+  [[ -z "$rest" ]] && valid_wg_key "$key" || return 1
+  if [[ -n "$extra" ]]; then
+    [[ "$extra" == ss=* ]] && valid_port "${extra#ss=}" || return 1
+    REPLY_HOME_SS_PORT="$((10#${extra#ss=}))"
+  fi
+  REPLY_PEER_KEY="$key"
+}
+
 base64_encode_stream() {
   if [[ "${VOLWG_FORCE_OPENSSL_BASE64:-0}" != "1" ]] && command -v base64 >/dev/null 2>&1; then
     base64
@@ -264,9 +338,9 @@ load_pair_code() {
   decoded_public_key="$(pair_field "$payload" VPS_PUBLIC_KEY)"
 
   valid_node_id "$decoded_node" || { echo "错误：配对码节点 ID 无效" >&2; return 1; }
-  [[ -n "$decoded_name" ]] || { echo "错误：配对码线路名称为空" >&2; return 1; }
+  valid_display_name "$decoded_name" || { echo "错误：配对码线路名称为空或含控制字符" >&2; return 1; }
   valid_wg_prefix "$decoded_prefix" || { echo "错误：配对码网段无效" >&2; return 1; }
-  [[ "$decoded_endpoint" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "错误：配对码 VPS 地址无效" >&2; return 1; }
+  valid_endpoint_host "$decoded_endpoint" || { echo "错误：配对码 VPS 地址无效" >&2; return 1; }
   valid_port "$decoded_vps_wg_port" || { echo "错误：配对码 VPS WireGuard 端口无效" >&2; return 1; }
   valid_port "$decoded_home_wg_port" || { echo "错误：配对码家宽 WireGuard 端口无效" >&2; return 1; }
   valid_port "$decoded_vps_ss_port" || { echo "错误：配对码 VPS SS 端口无效" >&2; return 1; }
@@ -291,6 +365,7 @@ load_pair_code() {
   HOME_WG_PORT="$decoded_home_wg_port"
   VPS_SS_PORT="$decoded_vps_ss_port"
   HOME_SS_PORT="$decoded_home_ss_port"
+  PAIR_HOME_SS_PORT="$decoded_home_ss_port"
   HOME_BACKEND="$decoded_backend"
   MODE="$decoded_mode"
   PUBLIC_SS_ENABLED="$decoded_public_ss"
@@ -355,11 +430,14 @@ port_in_use() {
     listen_port="$(wg show "$iface" listen-port 2>/dev/null || true)"
     [[ "$listen_port" == "$port" ]] && return 0
   done < <(wg show interfaces 2>/dev/null | tr ' ' '\n')
-  printf -v hex '%04X' "$port"
-  for table in /proc/net/udp /proc/net/udp6 /proc/net/tcp /proc/net/tcp6; do
-    [[ -r "$table" ]] || continue
-    grep -Eqi "[[:space:]][0-9A-F]+:${hex}[[:space:]]" "$table" && return 0
-  done
+  # 替换节点时，本节点自己正在监听的端口不算占用；其他节点的记录仍要检查。
+  if ! is_own_port "$port"; then
+    printf -v hex '%04X' "$port"
+    for table in /proc/net/udp /proc/net/udp6 /proc/net/tcp /proc/net/tcp6; do
+      [[ -r "$table" ]] || continue
+      grep -Eqi "[[:space:]][0-9A-F]+:${hex}[[:space:]]" "$table" && return 0
+    done
+  fi
   shopt -s nullglob
   state_files=(/etc/wg-home-exit/nodes/*.conf /etc/wg-home-exit/manual/*.conf)
   if [[ "$ROLE" == "vps" ]]; then
@@ -376,6 +454,43 @@ port_in_use() {
     done
   done
   return 1
+}
+
+is_own_port() {
+  local own
+  [[ "$REPLACE_NODE" == "1" ]] || return 1
+  for own in ${OWN_PORTS[@]+"${OWN_PORTS[@]}"}; do
+    [[ "$own" == "$1" ]] && return 0
+  done
+  return 1
+}
+
+load_replace_record() {
+  # --replace 时以该节点已保存的网段和端口作为默认值，而不是全局默认值；
+  # 命令行明确指定或配对码提供的值优先。
+  local record key value own_fields loaded=" "
+  [[ "$REPLACE_NODE" == "1" ]] || return 0
+  if [[ "$ROLE" == "vps" ]]; then
+    own_fields=" VPS_WG_PORT VPS_SS_PORT "
+  else
+    own_fields=" HOME_WG_PORT HOME_SS_PORT "
+  fi
+  for record in "/etc/wg-home-exit/manual/$NODE_ID.conf" "/etc/wg-home-exit/nodes/$NODE_ID.conf"; do
+    [[ -r "$record" ]] || continue
+    for key in WG_PREFIX VPS_WG_PORT HOME_WG_PORT VPS_SS_PORT HOME_SS_PORT; do
+      [[ "$loaded" != *" $key "* ]] || continue
+      value="$(sed -n "s/^${key}=//p" "$record" | head -n 1)"
+      if [[ "$key" == WG_PREFIX ]]; then
+        valid_wg_prefix "$value" || continue
+      else
+        valid_port "$value" || continue
+        [[ "$own_fields" != *" $key "* ]] || OWN_PORTS+=("$value")
+      fi
+      loaded+="$key "
+      [[ "$PAIR_CODE_LOADED" != "1" && " $CLI_SET " != *" $key "* ]] || continue
+      printf -v "$key" '%s' "$value"
+    done
+  done
 }
 
 next_free_port() {
@@ -442,7 +557,7 @@ next_free_wg_prefix() {
 
 select_available_wg_prefix() {
   local selected_prefix
-  [[ "$ROLE" == "vps" && "$REPLACE_NODE" != "1" ]] || return 0
+  [[ "$ROLE" == "vps" ]] || return 0
   selected_prefix="$(next_free_wg_prefix "$WG_PREFIX")"
   if [[ "$selected_prefix" != "$WG_PREFIX" ]]; then
     echo "WireGuard 网段 ${WG_PREFIX}.0/24 已占用，输入默认值改为 ${selected_prefix}.0/24。"
@@ -452,7 +567,6 @@ select_available_wg_prefix() {
 
 select_available_local_ports() {
   local selected_port
-  [[ "$REPLACE_NODE" != "1" ]] || return 0
   if [[ "$ROLE" == "vps" ]]; then
     selected_port="$(next_free_port "$VPS_WG_PORT")"
     if [[ "$selected_port" != "$VPS_WG_PORT" ]]; then
@@ -599,21 +713,35 @@ prepare_remote_ssh_key() {
 }
 
 install_remote_ssh_public_key() {
-  local auth_file auth_dir
+  local auth_file auth_dir key_line
   [[ "$FULL_STACK" == "1" && "$ROLE" == "home" && "$REMOTE_SSH_ENABLED" == "1" && "$REMOTE_SSH_AUTH" == "key" ]] || return 0
   valid_ssh_public_key "$REMOTE_SSH_PUBLIC_KEY" || die "缺少有效的 VPS 线路 SSH 公钥"
+  key_line="$(ssh_key_line_for_node "$REMOTE_SSH_PUBLIC_KEY")"
   if [[ "$SYSTEM_KIND" == "openwrt" ]]; then
+    # Dropbear 不支持 from= 选项，写入后会拒绝整行；来源限制依靠隧道专用实例和防火墙。
     auth_dir="/etc/dropbear"
-    auth_file="$auth_dir/authorized_keys"
   else
     auth_dir="/root/.ssh"
-    auth_file="$auth_dir/authorized_keys"
+    # OpenSSH 只接受来自该线路 VPS 隧道地址的登录，私钥泄露也不能经 LAN/FRP 使用。
+    [[ ! -x /usr/sbin/sshd ]] || key_line="from=\"$WG_PREFIX.1\" $key_line"
   fi
+  auth_file="$auth_dir/authorized_keys"
+  write_node_authorized_key "$auth_file" "$key_line"
+}
+
+write_node_authorized_key() {
+  # 替换本节点旧公钥行，保留其他登录方式；原地写入以保持文件属主和权限。
+  local auth_file="$1" key_line="$2" auth_dir tmp_file
+  auth_dir="$(dirname "$auth_file")"
   mkdir -p "$auth_dir"
   chmod 700 "$auth_dir"
   touch "$auth_file"
   chmod 600 "$auth_file"
-  grep -qxF "$REMOTE_SSH_PUBLIC_KEY" "$auth_file" 2>/dev/null || printf '%s\n' "$REMOTE_SSH_PUBLIC_KEY" >>"$auth_file"
+  tmp_file="$(mktemp "$auth_file.volwg.XXXXXX")"
+  grep -Ev "[[:space:]]volwg-${NODE_ID}[[:space:]]*\$" "$auth_file" >"$tmp_file" || true
+  printf '%s\n' "$key_line" >>"$tmp_file"
+  cat "$tmp_file" >"$auth_file"
+  rm -f "$tmp_file"
 }
 
 find_working_ssserver() {
@@ -1010,14 +1138,14 @@ while (($#)); do
     --full) FULL_STACK="1"; shift ;;
     --node) NODE_ID="${2:-}"; shift 2 ;;
     --name) DISPLAY_NAME="${2:-}"; shift 2 ;;
-    --wg-prefix) WG_PREFIX="${2:-}"; shift 2 ;;
-    --vps-wg-port) VPS_WG_PORT="${2:-}"; shift 2 ;;
-    --home-wg-port) HOME_WG_PORT="${2:-}"; shift 2 ;;
-    --wg-port) VPS_WG_PORT="${2:-}"; HOME_WG_PORT="${2:-}"; shift 2 ;;
+    --wg-prefix) WG_PREFIX="${2:-}"; CLI_SET+=" WG_PREFIX"; shift 2 ;;
+    --vps-wg-port) VPS_WG_PORT="${2:-}"; CLI_SET+=" VPS_WG_PORT"; shift 2 ;;
+    --home-wg-port) HOME_WG_PORT="${2:-}"; CLI_SET+=" HOME_WG_PORT"; shift 2 ;;
+    --wg-port) VPS_WG_PORT="${2:-}"; HOME_WG_PORT="${2:-}"; CLI_SET+=" VPS_WG_PORT HOME_WG_PORT"; shift 2 ;;
     --endpoint) VPS_ENDPOINT="${2:-}"; shift 2 ;;
-    --vps-ss-port) VPS_SS_PORT="${2:-}"; shift 2 ;;
-    --home-ss-port) HOME_SS_PORT="${2:-}"; shift 2 ;;
-    --ss-port) VPS_SS_PORT="${2:-}"; HOME_SS_PORT="${2:-}"; shift 2 ;;
+    --vps-ss-port) VPS_SS_PORT="${2:-}"; CLI_SET+=" VPS_SS_PORT"; shift 2 ;;
+    --home-ss-port) HOME_SS_PORT="${2:-}"; CLI_SET+=" HOME_SS_PORT"; shift 2 ;;
+    --ss-port) VPS_SS_PORT="${2:-}"; HOME_SS_PORT="${2:-}"; CLI_SET+=" VPS_SS_PORT HOME_SS_PORT"; shift 2 ;;
     --home-backend) HOME_BACKEND="${2:-}"; shift 2 ;;
     --ss-password) SS_PASSWORD="${2:-}"; shift 2 ;;
     --public-ss)
@@ -1063,6 +1191,11 @@ fi
 [[ "$FULL_STACK" == "0" || "$FULL_STACK" == "1" ]] || die "完整部署模式无效"
 [[ "$HOME_BACKEND" == "ss-rust" || "$HOME_BACKEND" == "xray" ]] || die "--home-backend 必须是 ss-rust 或 xray"
 [[ "$MODE" == "relay" || "$MODE" == "direct" ]] || die "--mode 必须是 relay 或 direct"
+[[ -z "$DISPLAY_NAME" ]] || valid_display_name "$DISPLAY_NAME" || die "--name 不能含换行等控制字符，且不超过 128 字节"
+if [[ -n "$VPS_ENDPOINT" ]] && ! valid_endpoint_host "$VPS_ENDPOINT"; then
+  endpoint_host_hint "$VPS_ENDPOINT"
+  die "--endpoint 无效：$VPS_ENDPOINT"
+fi
 [[ "$(id -u)" == "0" ]] || die "请使用 root 或 sudo 运行"
 
 echo
@@ -1117,8 +1250,8 @@ if [[ -z "$NODE_ID" ]]; then
 else
   valid_node_id "$NODE_ID" || die "节点 ID 必须是 1-8 位小写字母、数字或下划线"
 fi
-[[ -n "$DISPLAY_NAME" ]] || DISPLAY_NAME="$(prompt_default "线路显示名称（两个窗口建议相同）" "家宽线路 $NODE_ID")"
-[[ -n "$DISPLAY_NAME" ]] || die "线路名称不能为空"
+[[ -n "$DISPLAY_NAME" ]] || DISPLAY_NAME="$(prompt_display_name "家宽线路 $NODE_ID")"
+valid_display_name "$DISPLAY_NAME" || die "线路名称无效"
 
 WG_IFACE="wgh_$NODE_ID"
 WG_CONFIG="/etc/wireguard/$WG_IFACE.conf"
@@ -1128,6 +1261,7 @@ WG_PUB="/etc/wireguard/$WG_IFACE.pub"
 if line_exists && [[ "$REPLACE_NODE" != "1" ]]; then
   die "节点 $NODE_ID 已存在。为防止覆盖，请换一个节点 ID；确需替换时明确添加 --replace"
 fi
+load_replace_record
 
 echo
 if [[ "$FULL_STACK" == "1" ]]; then
@@ -1203,11 +1337,7 @@ local_public_key="$(<"$WG_PUB")"
 if [[ "$ROLE" == "vps" ]]; then
   detected_endpoint="$(detect_public_ipv4)"
   if [[ -z "$VPS_ENDPOINT" ]]; then
-    if [[ -n "$detected_endpoint" ]]; then
-      VPS_ENDPOINT="$(prompt_default "VPS 公网 IP/域名（复制到家宽窗口）" "$detected_endpoint")"
-    else
-      VPS_ENDPOINT="$(prompt_required "VPS 公网 IP/域名（复制到家宽窗口）")"
-    fi
+    VPS_ENDPOINT="$(prompt_endpoint_host "VPS 公网 IP/域名（复制到家宽窗口）" "$detected_endpoint")"
   fi
 fi
 
@@ -1226,7 +1356,7 @@ if [[ "$FULL_STACK" == "1" ]]; then
   else
     echo "以下参数请以 VPS 窗口最终显示的值为准，在家宽窗口填写相同内容。"
     if [[ "$ROLE" == "home" && -z "$VPS_ENDPOINT" ]]; then
-      VPS_ENDPOINT="$(prompt_required "输入 VPS 窗口显示的公网 IP 或域名")"
+      VPS_ENDPOINT="$(prompt_endpoint_host "输入 VPS 窗口显示的公网 IP 或域名")"
     fi
     WG_PREFIX="$(prompt_default "WireGuard 网段前缀" "$WG_PREFIX")"
     VPS_WG_PORT="$(prompt_default "VPS WireGuard 公网 UDP 起始端口" "$VPS_WG_PORT")"
@@ -1294,7 +1424,7 @@ else
   VPS_WG_PORT="$(prompt_default "VPS WireGuard 公网 UDP 起始端口" "$VPS_WG_PORT")"
   HOME_WG_PORT="$(prompt_default "家宽机 WireGuard 本地 UDP 起始端口" "$HOME_WG_PORT")"
   if [[ "$ROLE" == "home" && -z "$VPS_ENDPOINT" ]]; then
-    VPS_ENDPOINT="$(prompt_required "输入 VPS 窗口显示的公网 IP 或域名")"
+    VPS_ENDPOINT="$(prompt_endpoint_host "输入 VPS 窗口显示的公网 IP 或域名")"
   fi
 fi
 
@@ -1315,6 +1445,12 @@ fi
 select_available_wg_prefix
 select_available_local_ports
 
+# 家宽端因端口占用顺延 SS 端口时，把最终端口附在回传公钥后，VPS 粘贴即可自动采用。
+home_reply_suffix=""
+if [[ "$FULL_STACK" == "1" && "$ROLE" == "home" && "$PAIR_CODE_LOADED" == "1" && "$HOME_SS_PORT" != "$PAIR_HOME_SS_PORT" ]]; then
+  home_reply_suffix=" ss=$HOME_SS_PORT"
+fi
+
 if [[ "$FULL_STACK" == "1" && "$ROLE" == "vps" && -z "$SS_PASSWORD" ]]; then
   SS_PASSWORD="$(dd if=/dev/urandom bs=16 count=1 2>/dev/null | base64_encode_stream | tr -d '\r\n')"
 fi
@@ -1332,7 +1468,7 @@ if [[ "$ROLE" == "vps" ]]; then
 else
   echo "【必须复制回 VPS】家宽 WireGuard 公钥（复制下面完整一行）："
 fi
-echo "$local_public_key"
+echo "$local_public_key$home_reply_suffix"
 if [[ "$FULL_STACK" == "1" && "$ROLE" == "vps" ]]; then
   echo
   echo "请把下面参数复制到家宽窗口："
@@ -1358,6 +1494,10 @@ elif [[ "$FULL_STACK" == "1" && "$ROLE" == "home" && "$PAIR_CODE_LOADED" == "1" 
   echo "  1) 复制上面的家宽 WireGuard 公钥完整一行。"
   echo "  2) 粘贴到 VPS 窗口的“粘贴家宽机公钥”提示后按 Enter。"
   echo "  3) 两边都完成写入后，WireGuard 才会建立连接。"
+  if [[ -n "$home_reply_suffix" ]]; then
+    echo "  注意：家宽 SS 端口 $PAIR_HOME_SS_PORT 已被占用，改用 ${HOME_SS_PORT}。"
+    echo "        上面一行末尾的 ss=$HOME_SS_PORT 必须一起复制，VPS 会自动采用该端口。"
+  fi
 fi
 echo "============================================================"
 echo
@@ -1370,16 +1510,33 @@ fi
 if [[ -n "$PAIR_PEER_PUBLIC_KEY" ]]; then
   peer_public_key="$PAIR_PEER_PUBLIC_KEY"
   echo "已从配对码读取 VPS 公钥。"
-elif [[ "$ROLE" == "vps" ]]; then
-  read -r -p "粘贴家宽机窗口标出的完整公钥：" peer_public_key
 else
-  read -r -p "粘贴 VPS 公钥：" peer_public_key
+  # 粘贴错误时重新输入；直接退出会让重跑的 VPS 生成新 SS 密钥，与已配置的家宽端不一致。
+  while true; do
+    if [[ "$ROLE" == "vps" ]]; then
+      read -r -p "粘贴家宽机窗口标出的完整公钥：" peer_reply || die "输入已结束，未写入配置"
+    else
+      read -r -p "粘贴 VPS 公钥：" peer_reply || die "输入已结束，未写入配置"
+    fi
+    if parse_peer_reply "$peer_reply" && [[ "$ROLE" == "vps" || -z "$REPLY_HOME_SS_PORT" ]]; then
+      break
+    fi
+    echo "公钥格式无效：应为 44 位 WireGuard 公钥（家宽窗口若显示 ss=端口，需整行复制）。请重新粘贴；按 Ctrl+C 退出。" >&2
+  done
+  peer_public_key="$REPLY_PEER_KEY"
 fi
-valid_wg_key "$peer_public_key" || die "粘贴的 WireGuard 公钥格式无效"
 
 if [[ "$FULL_STACK" == "1" && "$ROLE" == "vps" ]]; then
-  HOME_SS_PORT="$(prompt_default "确认家宽窗口最终采用的 SS2022 端口" "$HOME_SS_PORT")"
-  valid_port "$HOME_SS_PORT" || die "家宽机 SS 端口无效"
+  if [[ -n "$REPLY_HOME_SS_PORT" ]]; then
+    HOME_SS_PORT="$REPLY_HOME_SS_PORT"
+    echo "已从家宽回传读取最终 SS2022 端口：$HOME_SS_PORT"
+  else
+    while true; do
+      HOME_SS_PORT="$(prompt_default "确认家宽窗口最终采用的 SS2022 端口" "$HOME_SS_PORT")"
+      valid_port "$HOME_SS_PORT" && break
+      echo "端口必须是 1-65535 的数字，请重新输入。" >&2
+    done
+  fi
 fi
 if [[ "$FULL_STACK" == "1" && "$ROLE" == "home" ]]; then
   if [[ -z "$SS_PASSWORD" ]]; then
@@ -1614,7 +1771,7 @@ if [[ "$FULL_STACK" == "1" ]]; then
     if [[ "$PAIR_CODE_LOADED" == "1" ]]; then
       echo
       echo "【VPS 端尚未完成时】复制下面家宽公钥到 VPS 窗口："
-      echo "$local_public_key"
+      echo "$local_public_key$home_reply_suffix"
       echo "VPS 窗口粘贴并完成配置后，本线路才会握手成功。"
     fi
   else

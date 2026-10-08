@@ -102,6 +102,24 @@ archive_item() {
   ((archived_count++)) || true
 }
 
+remove_line_ssh_keys() {
+  # 删除注释为 volwg-<节点ID> 的线路公钥，否则 VPS 上归档的私钥仍能登录家宽机。
+  # 原文件先备份到归档目录；原地写回以保持属主和权限，其他公钥保持不变。
+  local auth_file tmp_file
+  for auth_file in /etc/dropbear/authorized_keys /root/.ssh/authorized_keys; do
+    [[ -f "$auth_file" ]] || continue
+    grep -Eq "[[:space:]]volwg-${NODE_ID}[[:space:]]*\$" "$auth_file" || continue
+    mkdir -p "$ARCHIVE_DIR$(dirname "$auth_file")"
+    cp -p "$auth_file" "$ARCHIVE_DIR$auth_file"
+    tmp_file="$(mktemp "$auth_file.volwg.XXXXXX")"
+    grep -Ev "[[:space:]]volwg-${NODE_ID}[[:space:]]*\$" "$auth_file" >"$tmp_file" || true
+    cat "$tmp_file" >"$auth_file"
+    rm -f "$tmp_file"
+    echo "已移除线路 SSH 公钥：$auth_file"
+    ((archived_count++)) || true
+  done
+}
+
 stop_systemd_service() {
   local service="$1"
   command -v systemctl >/dev/null 2>&1 || return 0
@@ -145,6 +163,7 @@ if [[ "$SYSTEM_KIND" == "openwrt" ]]; then
   archive_item "/etc/ss-rust-wg-home/$NODE_ID"
   archive_item "/etc/xray-wg-home/$NODE_ID"
   archive_item "$MANUAL_STATE"
+  remove_line_ssh_keys
   /etc/init.d/network reload >/dev/null 2>&1 || true
   /etc/init.d/firewall reload >/dev/null 2>&1 || /etc/init.d/firewall restart >/dev/null 2>&1 || true
   /etc/init.d/dropbear reload >/dev/null 2>&1 || true
@@ -169,6 +188,7 @@ else
     archive_item "/etc/systemd/system/$XRAY_SERVICE.service"
     archive_item "/etc/ss-rust-wg-home/$NODE_ID"
     archive_item "/etc/xray-wg-home/$NODE_ID"
+    remove_line_ssh_keys
   fi
   ip link del "$WG_IFACE" >/dev/null 2>&1 || true
   archive_item "/etc/wireguard/$WG_IFACE.conf"

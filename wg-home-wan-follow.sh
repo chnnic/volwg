@@ -17,7 +17,7 @@ RUNTIME_ROOT="${VOLWG_WAN_RUNTIME_DIR:-/var/run/volwg-wan}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_FILE="" INIT_SCRIPT="" MANUAL_STATE="" RUNTIME_FILE="" LOCK_DIR=""
 LAST_EGRESS="" LAST_RX="" LAST_RECOVERY=-60 FAILURES=0 PING_CONFIRMED=0
-PENDING_EGRESS_CHANGE=0
+PENDING_EGRESS_CHANGE=0 RECOVERING=0 RESUME_IFUP=0 STOP_REQUESTED=0
 HEALTH="等待探测" LAST_EVENT="尚未触发恢复"
 
 usage() {
@@ -154,11 +154,24 @@ apply_route_once() {
   local endpoint_pair endpoint_ip endpoint_port default_pair device gateway metric current peer
   local current_device current_gateway source_ip signature path_changed=0 rx_before rx_after target
   # ifdown 是用户的停用操作；守护进程不可因健康检查而把接口重新打开。
+  # 唯一例外：上一个守护进程在自己的 ifdown/ifup 之间被结束，接口是被自动恢复关掉的。
   if ! wg show "$WG_IFACE" >/dev/null 2>&1; then
+    if ((RESUME_IFUP)); then
+      RESUME_IFUP=0
+      if [[ "$(uci -q get "network.$WG_IFACE.proto" 2>/dev/null || true)" == "wireguard" ]]; then
+        ifup "$WG_IFACE" >/dev/null 2>&1 || true
+        LAST_EVENT="上次自动恢复被中断，已重新启动本线路"
+        logger -t volwg-wan-follow "线路 ${NODE_ID}：$LAST_EVENT"
+        HEALTH="已重新启动，等待隧道回包"
+        FAILURES=0 LAST_EGRESS="" LAST_RX="" PENDING_EGRESS_CHANGE=0
+        return 0
+      fi
+    fi
     HEALTH="接口未运行，等待手动启动"
     FAILURES=0 LAST_EGRESS="" LAST_RX="" PENDING_EGRESS_CHANGE=0
     return 0
   fi
+  RESUME_IFUP=0
   endpoint_pair="$(endpoint_from_wireguard 2>/dev/null || resolve_endpoint 2>/dev/null || true)"
   [[ -n "$endpoint_pair" ]] || { HEALTH="等待 VPS 地址解析"; return 0; }
   IFS='|' read -r endpoint_ip endpoint_port <<<"$endpoint_pair"
@@ -256,7 +269,7 @@ monotonic_seconds() {
 }
 
 recover_interface() {
-  local endpoint_ip="$1" endpoint_port="$2" device="$3" gateway="$4" metric="$5" now peer
+  local endpoint_ip="$1" endpoint_port="$2" device="$3" gateway="$4" metric="$5" now peer fresh_pair saved_traps
   now="$(monotonic_seconds)"
   if ((now - LAST_RECOVERY < RECOVERY_COOLDOWN)); then
     HEALTH="等待自动恢复冷却（$((RECOVERY_COOLDOWN - now + LAST_RECOVERY)) 秒）"
@@ -268,10 +281,21 @@ recover_interface() {
   FAILURES=0 PENDING_EGRESS_CHANGE=0
   LAST_EVENT="隧道无回包，已刷新本线路会话"
   logger -t volwg-wan-follow "线路 ${NODE_ID}：$LAST_EVENT"
+  # ifdown/ifup 必须成对完成：停止信号延后到 ifup 之后处理；同时在 RAM 中记录恢复进行中，
+  # 进程即使被强制结束，重启后的守护进程也会重新启动本线路，而不会误当成用户停用。
+  saved_traps="$(trap -p TERM INT)"
+  STOP_REQUESTED=0
+  trap 'STOP_REQUESTED=1' TERM INT
+  RECOVERING=1
+  save_runtime
   ifdown "$WG_IFACE" >/dev/null 2>&1 || true
   sleep 1
   ifup "$WG_IFACE" >/dev/null 2>&1 || true
   sleep 1
+  RECOVERING=0
+  # ifup 时 netifd 会重新解析 endpoint 域名；采用新地址，不能把恢复前缓存的旧 IP 写回。
+  fresh_pair="$(resolve_endpoint 2>/dev/null || endpoint_from_wireguard 2>/dev/null || true)"
+  [[ -z "$fresh_pair" ]] || IFS='|' read -r endpoint_ip endpoint_port <<<"$fresh_pair"
   replace_endpoint_route "$endpoint_ip" "$device" "$gateway" "$metric" >/dev/null 2>&1 || true
   peer="$(wg show "$WG_IFACE" peers 2>/dev/null | head -n 1)"
   if [[ -n "$peer" ]]; then
@@ -279,12 +303,17 @@ recover_interface() {
     set_live_keepalive "$peer" || true
   fi
   HEALTH="已刷新会话，等待隧道回包"
+  save_runtime
+  trap - TERM INT
+  [[ -z "$saved_traps" ]] || eval "$saved_traps"
+  ((STOP_REQUESTED == 0)) || exit 0
 }
 
 save_runtime() {
   # 状态仅写入 RAM，不在每次探测时写闪存。
-  printf 'HEALTH=%s\nLAST_EVENT=%s\nEGRESS=%s\nPING_CONFIRMED=%s\nLAST_RECOVERY=%s\nCHECKED_AT=%s\n' \
-    "$HEALTH" "$LAST_EVENT" "$LAST_EGRESS" "$PING_CONFIRMED" "$LAST_RECOVERY" "$(date +%s)" >"$RUNTIME_FILE.tmp"
+  [[ -n "$RUNTIME_FILE" ]] || return 0
+  printf 'HEALTH=%s\nLAST_EVENT=%s\nEGRESS=%s\nPING_CONFIRMED=%s\nLAST_RECOVERY=%s\nRECOVERING=%s\nCHECKED_AT=%s\n' \
+    "$HEALTH" "$LAST_EVENT" "$LAST_EGRESS" "$PING_CONFIRMED" "$LAST_RECOVERY" "$RECOVERING" "$(date +%s)" >"$RUNTIME_FILE.tmp"
   mv -f "$RUNTIME_FILE.tmp" "$RUNTIME_FILE"
 }
 
@@ -306,6 +335,7 @@ acquire_lock() {
   owner="$(field "$RUNTIME_FILE" LAST_RECOVERY)"
   [[ ! "$owner" =~ ^-?[0-9]+$ ]] || LAST_RECOVERY="$owner"
   [[ "$(field "$RUNTIME_FILE" PING_CONFIRMED)" != 1 ]] || PING_CONFIRMED=1
+  [[ "$(field "$RUNTIME_FILE" RECOVERING)" != 1 ]] || RESUME_IFUP=1
 }
 
 release_lock() {

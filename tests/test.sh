@@ -106,8 +106,8 @@ if grep -Fq 'tcp_probe "$home_ip"' <<<"$ssh_function"; then
 fi
 grep -Fq '0\\.0\\.0\\.0|$WG_PREFIX\\.2|\\*|::' "$ROOT_DIR/wg-home-key-wizard.sh"
 grep -Fq 'dropbear.volwg_$NODE_ID.PasswordAuth=off' "$ROOT_DIR/wg-home-key-wizard.sh"
-grep -Fq 'BUILTIN_VERSION="1.4.22"' "$ROOT_DIR/volwg"
-grep -Fxq '1.4.22' "$ROOT_DIR/VERSION"
+grep -Fq 'BUILTIN_VERSION="1.4.23"' "$ROOT_DIR/volwg"
+grep -Fxq '1.4.23' "$ROOT_DIR/VERSION"
 grep -Fq '自动让 WireGuard endpoint 跟随当前优先级最高' < <(bash "$ROOT_DIR/wg-home-wan-follow.sh" --help)
 grep -Fq 'interface_has_carrier' "$ROOT_DIR/wg-home-wan-follow.sh"
 grep -Fq 'ip -4 route replace "$endpoint_ip/32"' "$ROOT_DIR/wg-home-wan-follow.sh"
@@ -192,7 +192,73 @@ pair_functions="$(awk '/^while \(\(\$#\)\); do/{exit} {print}' "$ROOT_DIR/wg-hom
   [[ "$REMOTE_SSH_AUTH" == "key" && "$REMOTE_SSH_PUBLIC_KEY" == ssh-ed25519\ * ]]
   [[ "$SS_PASSWORD" == "AAAAAAAAAAAAAAAAAAAAAA==" ]]
   [[ "$PAIR_PEER_PUBLIC_KEY" == "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" ]]
+  [[ "$PAIR_HOME_SS_PORT" == "32002" ]]
+
+  # 配对码中的线路名称不能携带换行，否则会在 wg-quick 配置里注入 PreUp/PostUp。
+  valid_display_name "主线路-A 1"
+  if valid_display_name $'x\n[Interface]\nPreUp = id'; then exit 1; fi
+  if valid_display_name $'x\rPreUp = id'; then exit 1; fi
+  if valid_display_name ""; then exit 1; fi
+  DISPLAY_NAME=$'x\n[Interface]\nPreUp = touch /tmp/volwg-pwned'
+  evil_code="$(make_pair_code)"
+  if load_pair_code "$evil_code" 2>/dev/null; then exit 1; fi
+  valid_endpoint_host "vps.example.com"
+  valid_endpoint_host "203.0.113.10"
+  for bad_host in "203.0.113.10:51830" "2001:db8::1" "a'b" "-oProxy" ""; do
+    if valid_endpoint_host "$bad_host"; then exit 1; fi
+  done
+
+  # 家宽 SS 端口顺延后随公钥回传；VPS 粘贴时自动采用，格式错误则拒绝。
+  parse_peer_reply "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+  [[ "$REPLY_PEER_KEY" == "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" && -z "$REPLY_HOME_SS_PORT" ]]
+  parse_peer_reply "  AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= ss=31001 "
+  [[ "$REPLY_HOME_SS_PORT" == "31001" ]]
+  for bad_reply in "AAAA" "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= ss=abc" \
+                   "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= ss=70000" \
+                   "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= ss=31001 extra"; do
+    if parse_peer_reply "$bad_reply"; then exit 1; fi
+  done
+
+  # --replace 也必须检查端口；只有本节点自己的旧端口算作可用。
+  port_in_use() {
+    [[ "$1" == "51830" || "$1" == "31000" ]]
+  }
+  ROLE="vps" FULL_STACK="1" REPLACE_NODE="1" PUBLIC_SS_ENABLED="1"
+  VPS_WG_PORT="51830" VPS_SS_PORT="31000"
+  select_available_local_ports >/dev/null
+  [[ "$VPS_WG_PORT" == "51831" && "$VPS_SS_PORT" == "31001" ]]
+  # shellcheck disable=SC2034 # Read by is_own_port from the evaluated wizard functions.
+  OWN_PORTS=(31000)
+  is_own_port 31000
+  if is_own_port 31001; then exit 1; fi
+  REPLACE_NODE="0"
+  if is_own_port 31000; then exit 1; fi
+
+  # 线路 SSH 公钥：替换本节点旧行，保留用户自己的公钥和名称相近的其他节点。
+  NODE_ID="test1"
+  [[ "$(ssh_key_line_for_node "ssh-ed25519 CCCC")" == "ssh-ed25519 CCCC volwg-test1" ]]
+  [[ "$(ssh_key_line_for_node "ssh-ed25519 CCCC volwg-test1")" == "ssh-ed25519 CCCC volwg-test1" ]]
+  auth_test="$TEST_DIR/authorized_keys"
+  printf '%s\n' "ssh-ed25519 AAAA user@laptop" "ssh-ed25519 BBBB volwg-test1 volwg-test1" \
+    "ssh-ed25519 DDDD volwg-test10" >"$auth_test"
+  write_node_authorized_key "$auth_test" 'from="10.99.7.1" ssh-ed25519 CCCC volwg-test1'
+  [[ "$(cat "$auth_test")" == $'ssh-ed25519 AAAA user@laptop\nssh-ed25519 DDDD volwg-test10\nfrom="10.99.7.1" ssh-ed25519 CCCC volwg-test1' ]]
 )
+
+deploy_functions="$(awk '/^valid_endpoint_host\(\) \{/,/^}/; /^valid_display_name\(\) \{/,/^}/' "$ROOT_DIR/wg-home-deploy.sh")"
+(
+  eval "$deploy_functions"
+  valid_endpoint_host "vps.example.com"
+  if valid_endpoint_host "x'; touch /tmp/volwg-pwned; '"; then exit 1; fi
+  if valid_endpoint_host "203.0.113.10:51830"; then exit 1; fi
+  if valid_display_name $'a\nb'; then exit 1; fi
+)
+grep -Fq 'remote_node_state ssh_openwrt "$NODE_ID"' "$ROOT_DIR/wg-home-deploy.sh"
+grep -Fq '[[ "$(remote_node_state ssh_openwrt "$candidate")" == free ]]' "$ROOT_DIR/wg-home-deploy.sh"
+grep -Fq '"$OWN_HOME_SS_PORT"' "$ROOT_DIR/wg-home-deploy.sh"
+grep -Fq "grep -Ev '[[:space:]]volwg-\${NODE_ID}[[:space:]]*" "$ROOT_DIR/wg-home-deploy.sh"
+grep -Fq 'remove_line_ssh_keys' "$ROOT_DIR/wg-home-remove.sh"
+grep -Fq 'remove_line_ssh_keys' "$ROOT_DIR/wg-home-purge.sh"
 
 bash "$ROOT_DIR/tests/wan-follow.sh"
 echo "VolWG tests: PASS"

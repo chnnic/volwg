@@ -35,6 +35,8 @@ ASSUME_YES="0"
 GUIDED="0"
 AUTO_NODE_ID="0"
 AUTO_DISPLAY_NAME="0"
+CLI_SET=""
+OWN_VPS_WG_PORT="" OWN_HOME_WG_PORT="" OWN_VPS_SS_PORT="" OWN_HOME_SS_PORT=""
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
@@ -144,6 +146,37 @@ prompt_with_default() {
   printf '%s' "${answer:-$default_value}"
 }
 
+valid_endpoint_host() {
+  # 该值会写入远程 root 命令、UCI 和 SS 链接；只允许 IPv4/域名字符，杜绝引号注入。
+  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,252}$ ]]
+}
+
+endpoint_host_hint() {
+  case "$1" in
+    *:*) echo "VPS 公网地址只填写 IPv4 或域名，不要包含端口；IPv6 暂不支持。" >&2 ;;
+    *) echo "VPS 公网地址只能包含字母、数字、点、连字符和下划线，例如 203.0.113.10 或 vps.example.com。" >&2 ;;
+  esac
+}
+
+prompt_endpoint_host() {
+  local prompt="$1" default_value="$2" answer
+  while true; do
+    read -r -p "$prompt [$default_value]：" answer || die "输入已结束，未修改任何机器"
+    answer="${answer:-$default_value}"
+    if valid_endpoint_host "$answer"; then
+      printf '%s' "$answer"
+      return 0
+    fi
+    [[ -z "$answer" ]] || endpoint_host_hint "$answer"
+  done
+}
+
+valid_display_name() {
+  local LC_ALL=C name="$1"
+  [[ -n "$name" && ${#name} -le 128 ]] || return 1
+  [[ "$name" != *[$'\001'-$'\037'$'\177']* ]]
+}
+
 confirm_wireguard_only() {
   local role_label="$1" answer
   echo
@@ -210,7 +243,8 @@ guided_full_deploy() {
   VPS_SSH_PORT="$(prompt_with_default "VPS SSH 端口" "$VPS_SSH_PORT")"
   read -r -p "VPS SSH 私钥路径（留空使用 ssh-agent/SSH config）：" VPS_IDENTITY
   default_public_host="${VPS_TARGET#*@}"
-  VPS_PUBLIC_HOST="$(prompt_with_default "VPS 公网 IP 或域名" "$default_public_host")"
+  valid_endpoint_host "$default_public_host" || default_public_host=""
+  VPS_PUBLIC_HOST="$(prompt_endpoint_host "VPS 公网 IP 或域名" "$default_public_host")"
   echo
   echo "家宽机位于 NAT/CGNAT 后面时，请填写可达的 FRP、映射端口、LAN 或 VPN 地址。"
   OPENWRT_TARGET="$(prompt_required "家宽机可达 SSH 地址，例如 root@frp.example.com")"
@@ -223,6 +257,7 @@ guided_full_deploy() {
   WG_PREFIX="$(prompt_with_default "WireGuard 网段前缀" "$WG_PREFIX")"
   VPS_WG_PORT="$(prompt_with_default "VPS WireGuard 公网 UDP 端口" "$VPS_WG_PORT")"
   HOME_WG_PORT="$(prompt_with_default "家宽机 WireGuard 本地 UDP 端口" "$HOME_WG_PORT")"
+  CLI_SET+=" WG_PREFIX VPS_WG_PORT HOME_WG_PORT HOME_SS_PORT VPS_SS_PORT"
 
   echo
   echo "[4/4] Shadowsocks 入口"
@@ -283,10 +318,10 @@ while (($#)); do
     --identity) IDENTITY="${2:-}"; shift 2 ;;
     --vps-identity) VPS_IDENTITY="${2:-}"; shift 2 ;;
     --home-identity) HOME_IDENTITY="${2:-}"; shift 2 ;;
-    --vps-wg-port) VPS_WG_PORT="${2:-}"; shift 2 ;;
-    --home-wg-port) HOME_WG_PORT="${2:-}"; shift 2 ;;
-    --vps-ss-port) VPS_SS_PORT="${2:-}"; shift 2 ;;
-    --home-ss-port) HOME_SS_PORT="${2:-}"; shift 2 ;;
+    --vps-wg-port) VPS_WG_PORT="${2:-}"; CLI_SET+=" VPS_WG_PORT"; shift 2 ;;
+    --home-wg-port) HOME_WG_PORT="${2:-}"; CLI_SET+=" HOME_WG_PORT"; shift 2 ;;
+    --vps-ss-port) VPS_SS_PORT="${2:-}"; CLI_SET+=" VPS_SS_PORT"; shift 2 ;;
+    --home-ss-port) HOME_SS_PORT="${2:-}"; CLI_SET+=" HOME_SS_PORT"; shift 2 ;;
     --public-ss)
       case "${2:-}" in
         on) PUBLIC_SS_ENABLED="1" ;;
@@ -306,9 +341,9 @@ while (($#)); do
     --tunnel-ssh-port) HOME_TUNNEL_SSH_PORT="${2:-}"; shift 2 ;;
     --remote-ssh-auth) REMOTE_SSH_AUTH="${2:-}"; shift 2 ;;
     --home-backend) HOME_BACKEND="${2:-}"; shift 2 ;;
-    --wg-port) VPS_WG_PORT="${2:-}"; HOME_WG_PORT="${2:-}"; shift 2 ;;
-    --ss-port) VPS_SS_PORT="${2:-}"; HOME_SS_PORT="${2:-}"; shift 2 ;;
-    --wg-prefix) WG_PREFIX="${2:-}"; shift 2 ;;
+    --wg-port) VPS_WG_PORT="${2:-}"; HOME_WG_PORT="${2:-}"; CLI_SET+=" VPS_WG_PORT HOME_WG_PORT"; shift 2 ;;
+    --ss-port) VPS_SS_PORT="${2:-}"; HOME_SS_PORT="${2:-}"; CLI_SET+=" VPS_SS_PORT HOME_SS_PORT"; shift 2 ;;
+    --wg-prefix) WG_PREFIX="${2:-}"; CLI_SET+=" WG_PREFIX"; shift 2 ;;
     --replace) REPLACE_NODE="1"; shift ;;
     --yes) ASSUME_YES="1"; shift ;;
     --guided) GUIDED="1"; shift ;;
@@ -334,9 +369,13 @@ fi
 [[ "$REMOTE_SSH_ENABLED" == "0" || "$REMOTE_SSH_ENABLED" == "1" ]] || die "隧道 SSH 开关无效"
 [[ "$REMOTE_SSH_AUTH" == "key" || "$REMOTE_SSH_AUTH" == "password" ]] || die "SSH 认证方式必须是 key 或 password"
 [[ "$NODE_ID" =~ ^[a-z0-9][a-z0-9_]{0,7}$ ]] || die "--node 必须是 1-8 位小写字母、数字或下划线"
-[[ -n "$DISPLAY_NAME" ]] || die "--name 不能为空"
+valid_display_name "$DISPLAY_NAME" || die "--name 不能为空、不能含换行等控制字符，且不超过 128 字节"
 [[ -n "$VPS_TARGET" ]] || die "缺少 --vps"
 [[ -n "$VPS_PUBLIC_HOST" ]] || die "缺少 --vps-public-host"
+if ! valid_endpoint_host "$VPS_PUBLIC_HOST"; then
+  endpoint_host_hint "$VPS_PUBLIC_HOST"
+  die "--vps-public-host 无效：$VPS_PUBLIC_HOST"
+fi
 [[ -n "$OPENWRT_TARGET" ]] || die "缺少 --home"
 if ! [[ "$VPS_WG_PORT" =~ ^[0-9]+$ ]] || ((VPS_WG_PORT < 1 || VPS_WG_PORT > 65535)); then
   die "VPS WireGuard 端口无效"
@@ -413,25 +452,74 @@ ssh_openwrt() {
   ssh "${HOME_SSH_ARGS[@]}" -p "$OPENWRT_SSH_PORT" "$OPENWRT_TARGET" "$@"
 }
 
-find_remote_free_node_id() {
+remote_node_state() {
+  # 两端分别检查同名节点的接口、配置、服务和记录；输出 used/free，SSH 失败时终止，
+  # 不能把“检查失败”当成“节点不存在”。
+  local ssh_function="$1" candidate="$2" result
+  [[ "$candidate" =~ ^[a-z0-9][a-z0-9_]{0,7}$ ]] || die "节点 ID 无效：$candidate"
+  # 变量必须在远程机器展开；本地只注入已验证的节点 ID。
   # shellcheck disable=SC2016
-  ssh_vps 'set -eu; number=1; while test "$number" -le 99; do candidate="home$number"; iface="wgh_$candidate"; if test ! -e "/etc/wireguard/$iface.conf" && test ! -e "/etc/wg-home-exit/nodes/$candidate.conf" && ! ip link show "$iface" >/dev/null 2>&1; then printf "%s" "$candidate"; exit 0; fi; number=$((number + 1)); done; exit 1'
+  result="$("$ssh_function" "id='$candidate'; iface=\"wgh_\$id\"
+for path in \"/etc/wireguard/\$iface.conf\" \"/etc/wg-home-exit/nodes/\$id.conf\" \"/etc/wg-home-exit/manual/\$id.conf\" \"/etc/wg-home-exit/wan-follow/\$id.conf\" \"/etc/ss-rust-wg-home/\$id\" \"/etc/xray-wg-home/\$id\" \"/etc/init.d/ssrust-wgh-\$id\" \"/etc/init.d/xray-wgh-\$id\" \"/etc/systemd/system/ssrust-wgh-\$id.service\" \"/etc/systemd/system/xray-wgh-\$id.service\"; do
+  if test -e \"\$path\"; then echo used; exit 0; fi
+done
+if ip link show \"\$iface\" >/dev/null 2>&1; then echo used; exit 0; fi
+if command -v uci >/dev/null 2>&1 && uci -q get \"network.\$iface\" >/dev/null 2>&1; then echo used; exit 0; fi
+echo free")" || die "无法检查节点 $candidate 是否已存在，未修改任何机器"
+  [[ "$result" == used || "$result" == free ]] || die "节点检查返回异常：$result"
+  printf '%s' "$result"
+}
+
+find_remote_free_node_id() {
+  local number candidate
+  for ((number=1; number<=99; number++)); do
+    candidate="home$number"
+    [[ "$(remote_node_state ssh_vps "$candidate")" == free ]] || continue
+    [[ "$(remote_node_state ssh_openwrt "$candidate")" == free ]] || continue
+    printf '%s' "$candidate"
+    return 0
+  done
+  die "home1-home99 在 VPS 或家宽机上均已使用，请用 --node 指定其他节点 ID"
+}
+
+load_replace_record() {
+  # --replace 时以 VPS 上该节点已保存的网段和端口为默认值，并视为本节点自己的占用；
+  # 命令行明确指定的值优先。
+  local record key value
+  [[ "$REPLACE_NODE" == "1" ]] || return 0
+  record="$(ssh_vps "for f in '/etc/wg-home-exit/nodes/$NODE_ID.conf' '/etc/wg-home-exit/manual/$NODE_ID.conf'; do test -r \"\$f\" || continue; sed -n -e '/^WG_PREFIX=/p' -e '/^VPS_WG_PORT=/p' -e '/^HOME_WG_PORT=/p' -e '/^VPS_SS_PORT=/p' -e '/^HOME_SS_PORT=/p' \"\$f\"; break; done" 2>/dev/null || true)"
+  for key in WG_PREFIX VPS_WG_PORT HOME_WG_PORT VPS_SS_PORT HOME_SS_PORT; do
+    value="$(sed -n "s/^${key}=//p" <<<"$record" | head -n 1)"
+    if [[ "$key" == WG_PREFIX ]]; then
+      [[ "$value" =~ ^([0-9]{1,3}\.){2}[0-9]{1,3}$ ]] || continue
+    else
+      if ! [[ "$value" =~ ^[0-9]{1,5}$ ]] || ((10#$value < 1 || 10#$value > 65535)); then
+        continue
+      fi
+      printf -v "OWN_$key" '%s' "$value"
+    fi
+    [[ " $CLI_SET " == *" $key "* ]] || printf -v "$key" '%s' "$value"
+  done
 }
 
 find_remote_free_port() {
-  local ssh_function="$1" start_port="$2" primary_field="$3" legacy_field="$4"
+  local ssh_function="$1" start_port="$2" primary_field="$3" legacy_field="$4" own_port="${5:-}"
   # 变量必须在远程机器展开；本地只注入已验证的数字、字段名和节点 ID。
+  # own_port 是替换节点时本节点自己正在监听的端口，不算占用。
   # shellcheck disable=SC2016
   "$ssh_function" "set -eu
 port='$start_port'
+own='$own_port'
 port_used() {
   candidate=\"\$1\"
   hex=\$(printf '%04X' \"\$candidate\")
-  for table in /proc/net/udp /proc/net/udp6 /proc/net/tcp /proc/net/tcp6; do
-    test -r \"\$table\" || continue
-    grep -Eqi \"[[:space:]][0-9A-F]+:\$hex[[:space:]]\" \"\$table\" && return 0
-  done
-  for file in /etc/wg-home-exit/nodes/*.conf; do
+  if test \"\$candidate\" != \"\$own\"; then
+    for table in /proc/net/udp /proc/net/udp6 /proc/net/tcp /proc/net/tcp6; do
+      test -r \"\$table\" || continue
+      grep -Eqi \"[[:space:]][0-9A-F]+:\$hex[[:space:]]\" \"\$table\" && return 0
+    done
+  fi
+  for file in /etc/wg-home-exit/nodes/*.conf /etc/wg-home-exit/manual/*.conf; do
     test -f \"\$file\" || continue
     file_node=\$(sed -n 's/^NODE_ID=//p' \"\$file\" | head -n 1)
     test \"\$file_node\" = '$NODE_ID' && continue
@@ -484,22 +572,39 @@ if [[ "$AUTO_NODE_ID" == "1" && "$REPLACE_NODE" != "1" ]]; then
 fi
 
 if [[ "$REPLACE_NODE" != "1" ]]; then
-  original_port="$VPS_WG_PORT"
-  VPS_WG_PORT="$(find_remote_free_port ssh_vps "$VPS_WG_PORT" VPS_WG_PORT WG_PORT)"
-  [[ "$VPS_WG_PORT" == "$original_port" ]] || echo "VPS WireGuard UDP $original_port 已占用，自动改用 $VPS_WG_PORT。"
-
-  original_port="$HOME_WG_PORT"
-  HOME_WG_PORT="$(find_remote_free_port ssh_openwrt "$HOME_WG_PORT" HOME_WG_PORT WG_PORT)"
-  [[ "$HOME_WG_PORT" == "$original_port" ]] || echo "家宽 WireGuard UDP $original_port 已占用，自动改用 $HOME_WG_PORT。"
-
-  original_port="$VPS_SS_PORT"
-  VPS_SS_PORT="$(find_remote_free_port ssh_vps "$VPS_SS_PORT" VPS_SS_PORT SS_PORT)"
-  [[ "$VPS_SS_PORT" == "$original_port" ]] || echo "VPS SS TCP/UDP $original_port 已占用，自动改用 $VPS_SS_PORT。"
-
-  original_port="$HOME_SS_PORT"
-  HOME_SS_PORT="$(find_remote_free_port ssh_openwrt "$HOME_SS_PORT" HOME_SS_PORT SS_PORT)"
-  [[ "$HOME_SS_PORT" == "$original_port" ]] || echo "家宽 SS TCP/UDP $original_port 已占用，自动改用 $HOME_SS_PORT。"
+  # 节点 ID 必须在两端都未使用；家宽机可能已有另一台 VPS 的同名线路。
+  [[ "$(remote_node_state ssh_vps "$NODE_ID")" == free ]] || \
+    die "VPS 上节点 $NODE_ID 已存在；换一个 --node，或确认覆盖后添加 --replace"
+  [[ "$(remote_node_state ssh_openwrt "$NODE_ID")" == free ]] || \
+    die "家宽机上已有节点 $NODE_ID（可能属于另一台 VPS），继续会覆盖它的 WireGuard 和 SS 密钥。请换一个 --node；确认要替换家宽上的这条线路时添加 --replace"
 fi
+load_replace_record
+[[ "$WG_PREFIX" =~ ^([0-9]{1,3}\.){2}[0-9]{1,3}$ ]] || die "--wg-prefix 应为 A.B.C，例如 10.88.0"
+
+# 替换节点同样检查端口：只把本节点自己的旧端口视为可用，不能占用其他节点或系统服务的端口。
+original_port="$VPS_WG_PORT"
+VPS_WG_PORT="$(find_remote_free_port ssh_vps "$VPS_WG_PORT" VPS_WG_PORT WG_PORT "$OWN_VPS_WG_PORT")"
+[[ "$VPS_WG_PORT" == "$original_port" ]] || echo "VPS WireGuard UDP $original_port 已占用，自动改用 $VPS_WG_PORT。"
+
+original_port="$HOME_WG_PORT"
+HOME_WG_PORT="$(find_remote_free_port ssh_openwrt "$HOME_WG_PORT" HOME_WG_PORT WG_PORT "$OWN_HOME_WG_PORT")"
+[[ "$HOME_WG_PORT" == "$original_port" ]] || echo "家宽 WireGuard UDP $original_port 已占用，自动改用 $HOME_WG_PORT。"
+
+original_port="$VPS_SS_PORT"
+VPS_SS_PORT="$(find_remote_free_port ssh_vps "$VPS_SS_PORT" VPS_SS_PORT SS_PORT "$OWN_VPS_SS_PORT")"
+if [[ "$PUBLIC_SS_ENABLED" == "1" && "$VPS_SS_PORT" == "$VPS_WG_PORT" ]]; then
+  ((VPS_WG_PORT < 65535)) || die "VPS 公网 SS 端口不能与 WireGuard 端口相同"
+  VPS_SS_PORT="$(find_remote_free_port ssh_vps "$((VPS_WG_PORT + 1))" VPS_SS_PORT SS_PORT "$OWN_VPS_SS_PORT")"
+fi
+[[ "$VPS_SS_PORT" == "$original_port" ]] || echo "VPS SS TCP/UDP $original_port 已占用，自动改用 $VPS_SS_PORT。"
+
+original_port="$HOME_SS_PORT"
+HOME_SS_PORT="$(find_remote_free_port ssh_openwrt "$HOME_SS_PORT" HOME_SS_PORT SS_PORT "$OWN_HOME_SS_PORT")"
+if [[ "$HOME_SS_PORT" == "$HOME_WG_PORT" ]]; then
+  ((HOME_WG_PORT < 65535)) || die "家宽 SS 端口不能与 WireGuard 端口相同"
+  HOME_SS_PORT="$(find_remote_free_port ssh_openwrt "$((HOME_WG_PORT + 1))" HOME_SS_PORT SS_PORT "$OWN_HOME_SS_PORT")"
+fi
+[[ "$HOME_SS_PORT" == "$original_port" ]] || echo "家宽 SS TCP/UDP $original_port 已占用，自动改用 $HOME_SS_PORT。"
 vps_detected_ipv4="$(detect_remote_public_ipv4 2>/dev/null || true)"
 
 wait_for_openwrt() {
@@ -605,10 +710,6 @@ vps_os="$(ssh_vps '. /etc/os-release 2>/dev/null; printf "%s" "${ID:-unknown}"')
 home_kind="$(ssh_openwrt 'if command -v uci >/dev/null 2>&1 && command -v opkg >/dev/null 2>&1; then echo openwrt; elif test -r /etc/os-release && command -v systemctl >/dev/null 2>&1; then . /etc/os-release; case "${ID:-}:${VERSION_ID:-}" in debian:11|debian:12|debian:13|ubuntu:*) echo linux ;; *) echo unsupported ;; esac; else echo unsupported; fi')"
 [[ "$home_kind" == "openwrt" || "$home_kind" == "linux" ]] || die "家宽端仅支持 OpenWrt/ImmortalWrt、Debian 11/12/13 或 Ubuntu"
 echo "检测到家宽端类型：$home_kind"
-
-if [[ "$REPLACE_NODE" != "1" ]] && ssh_vps "test -e '/etc/wireguard/$WG_IFACE.conf' || test -e '/etc/wg-home-exit/nodes/$NODE_ID.conf'"; then
-  die "节点 $NODE_ID 已存在；换一个 --node，或确认覆盖后添加 --replace"
-fi
 
 # 同时检查 VolWG 新旧配置，避免相同隧道网段被两个 WireGuard 接口争用。
 vps_network_conflict="$(ssh_vps "set -eu; for f in /etc/wireguard/*.conf; do test -f \"\$f\" || continue; test \"\$f\" = '/etc/wireguard/$WG_IFACE.conf' && continue; address=\$(sed -n 's/^[[:space:]]*Address[[:space:]]*=[[:space:]]*//p' \"\$f\" | head -n 1); if test \"\$address\" = '$WG_PREFIX.1/24' || test \"\$address\" = '$WG_PREFIX.2/24'; then basename \"\$f\" .conf; fi; done" 2>/dev/null || true)"
@@ -1078,9 +1179,13 @@ if test '$REMOTE_SSH_ENABLED' = 1 && test '$REMOTE_SSH_AUTH' = key; then
   chmod 700 /etc/dropbear
   touch /etc/dropbear/authorized_keys
   chmod 600 /etc/dropbear/authorized_keys
+  # 先移除本节点旧公钥行再追加；Dropbear 不支持 from=，不能加来源限制。
   AUTHORIZED_KEY=\$(cat /tmp/volwg-home-ssh.pub)
-  grep -qxF \"\$AUTHORIZED_KEY\" /etc/dropbear/authorized_keys 2>/dev/null || printf '%s\n' \"\$AUTHORIZED_KEY\" >>/etc/dropbear/authorized_keys
-  rm -f /tmp/volwg-home-ssh.pub
+  AUTH_TMP=\$(mktemp /etc/dropbear/authorized_keys.volwg.XXXXXX)
+  grep -Ev '[[:space:]]volwg-${NODE_ID}[[:space:]]*\$' /etc/dropbear/authorized_keys >\"\$AUTH_TMP\" || true
+  printf '%s\n' \"\$AUTHORIZED_KEY\" >>\"\$AUTH_TMP\"
+  cat \"\$AUTH_TMP\" >/etc/dropbear/authorized_keys
+  rm -f \"\$AUTH_TMP\" /tmp/volwg-home-ssh.pub
 fi
 '/etc/init.d/$HOME_SERVICE' enable"
 
@@ -1139,9 +1244,14 @@ if test '$REMOTE_SSH_ENABLED' = 1 && test '$REMOTE_SSH_AUTH' = key; then
   install -d -m 700 /root/.ssh
   touch /root/.ssh/authorized_keys
   chmod 600 /root/.ssh/authorized_keys
+  # OpenSSH 限定只接受来自该线路 VPS 隧道地址的登录；先移除本节点旧公钥行再追加。
   AUTHORIZED_KEY=\$(cat /tmp/volwg-home-ssh.pub)
-  grep -qxF \"\$AUTHORIZED_KEY\" /root/.ssh/authorized_keys 2>/dev/null || printf '%s\n' \"\$AUTHORIZED_KEY\" >>/root/.ssh/authorized_keys
-  rm -f /tmp/volwg-home-ssh.pub
+  if test -x /usr/sbin/sshd; then AUTHORIZED_KEY=\"from=\\\"$WG_PREFIX.1\\\" \$AUTHORIZED_KEY\"; fi
+  AUTH_TMP=\$(mktemp /root/.ssh/authorized_keys.volwg.XXXXXX)
+  grep -Ev '[[:space:]]volwg-${NODE_ID}[[:space:]]*\$' /root/.ssh/authorized_keys >\"\$AUTH_TMP\" || true
+  printf '%s\n' \"\$AUTHORIZED_KEY\" >>\"\$AUTH_TMP\"
+  cat \"\$AUTH_TMP\" >/root/.ssh/authorized_keys
+  rm -f \"\$AUTH_TMP\" /tmp/volwg-home-ssh.pub
 fi
 rm -f /tmp/home-wg.conf /tmp/wg-home-backend.json /tmp/wg-home-backend.service '/tmp/wgh-input-$NODE_ID' '/tmp/wgh-input-$NODE_ID.service'
 systemctl daemon-reload
