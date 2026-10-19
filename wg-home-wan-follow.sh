@@ -14,6 +14,7 @@ KEEPALIVE="${VOLWG_WAN_KEEPALIVE:-5}"
 FAILURE_LIMIT=3
 RECOVERY_COOLDOWN=60
 RUNTIME_ROOT="${VOLWG_WAN_RUNTIME_DIR:-/var/run/volwg-wan}"
+INIT_ROOT="${VOLWG_INIT_DIR:-/etc/init.d}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_FILE="" INIT_SCRIPT="" MANUAL_STATE="" RUNTIME_FILE="" LOCK_DIR=""
 LAST_EGRESS="" LAST_RX="" LAST_RECOVERY=-60 FAILURES=0 PING_CONFIRMED=0
@@ -35,7 +36,8 @@ usage() {
   网线可用时走低 metric 的 WAN；网线断开后自动切到 5G/备用 WAN。
   每 3 秒主动探测隧道，保活 5 秒；公网 IP/NAT 变化后自动学习新端点。
   连续 3 次确认故障才刷新单条线路，恢复操作至少间隔 60 秒。
-  refresh-all 用于升级后刷新已启用的服务，并为活动的旧家宽线路补开功能。
+  refresh-all 用于升级后刷新已启用的服务，并为活动的旧家宽线路补开功能；
+  同时让旧版生成的 SS 服务端（ss-rust/Xray）在隧道 up 后自动重启。
   显式关闭的自动恢复服务、手动停用的 WireGuard 接口不会被重新开启。
 EOF
 }
@@ -454,9 +456,36 @@ should_refresh_follow() {
   fi
 }
 
+# v1.4.24 及更早版本生成的 OpenWrt SS 服务端只重试 5 次，且不等待隧道：
+# 开机时常先于 WireGuard 地址出现而绑定失败，随后 procd 判定崩溃循环不再拉起。
+refresh_backend_services() {
+  local init name node temporary failed=0
+  for init in "$INIT_ROOT"/ssrust-wgh-* "$INIT_ROOT"/xray-wgh-*; do
+    [[ -f "$init" ]] || continue
+    name="${init##*/}"; node="${name#*-wgh-}"
+    valid_node "$node" || continue
+    grep -Fq 'procd_add_interface_trigger' "$init" && continue
+    # 只改 VolWG 自己生成的模板，用户自行改过的服务脚本保持原样。
+    grep -Fq 'procd_set_param respawn 3600 5 5' "$init" || continue
+    temporary="$(mktemp "$init.tmp.XXXXXX")" || { failed=1; continue; }
+    if sed 's/procd_set_param respawn 3600 5 5/procd_set_param respawn 3600 5 0/' "$init" >"$temporary" \
+      && printf '\n# SS 服务端监听 WireGuard 地址：开机时常先于隧道启动而绑定失败，隧道每次 up 后重启。\nservice_triggers() {\n  procd_add_interface_trigger "interface.*.up" "wgh_%s" %s restart\n}\n' "$node" "/etc/init.d/$name" >>"$temporary" \
+      && chmod 755 "$temporary" && mv -f -- "$temporary" "$init"; then
+      if "$init" enabled >/dev/null 2>&1; then
+        "$init" restart >/dev/null 2>&1 || failed=1
+      fi
+    else
+      rm -f -- "$temporary"
+      failed=1
+    fi
+  done
+  return "$failed"
+}
+
 refresh_all() {
   local record node service iface failed=0
   require_openwrt
+  refresh_backend_services || failed=1
   for record in "$MANUAL_ROOT"/*.conf; do
     [[ -r "$record" && "$(field "$record" ROLE)" == home ]] || continue
     node="${record##*/}"; node="${node%.conf}"

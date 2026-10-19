@@ -929,10 +929,15 @@ USE_PROCD=1
 start_service() {
   procd_open_instance
   procd_set_param command /usr/local/bin/wg-home-xray-core run -c /etc/xray-wg-home/$NODE_ID/config.json
-  procd_set_param respawn 3600 5 5
+  procd_set_param respawn 3600 5 0
   procd_set_param stdout 1
   procd_set_param stderr 1
   procd_close_instance
+}
+
+# SS 服务端监听 WireGuard 地址：开机时常先于隧道启动而绑定失败，隧道每次 up 后重启。
+service_triggers() {
+  procd_add_interface_trigger "interface.*.up" "$WG_IFACE" /etc/init.d/xray-wgh-$NODE_ID restart
 }
 EOF
 chmod 700 "$TMP_DIR/openwrt-xray-init"
@@ -959,11 +964,16 @@ USE_PROCD=1
 start_service() {
   procd_open_instance
   procd_set_param command /usr/local/bin/wg-home-ssserver -c /etc/ss-rust-wg-home/$NODE_ID/config.json
-  procd_set_param respawn 3600 5 5
+  procd_set_param respawn 3600 5 0
   procd_set_param limits nofile="1048576 1048576"
   procd_set_param stdout 1
   procd_set_param stderr 1
   procd_close_instance
+}
+
+# SS 服务端监听 WireGuard 地址：开机时常先于隧道启动而绑定失败，隧道每次 up 后重启。
+service_triggers() {
+  procd_add_interface_trigger "interface.*.up" "$WG_IFACE" /etc/init.d/ssrust-wgh-$NODE_ID restart
 }
 EOF
 chmod 700 "$TMP_DIR/openwrt-ssrust-init"

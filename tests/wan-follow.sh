@@ -249,4 +249,37 @@ assert_equal "$ROUTE_TARGET" "198.51.100.20/32" "endpoint route follows the new 
   assert_equal "$UP_COUNT" 1 "later manual pause is still respected"
 )
 
+# 旧版 OpenWrt SS 服务端：升级时补上“隧道 up 后重启”，只改 VolWG 自己生成的模板。
+(
+  TEST_DIR="$(mktemp -d)"
+  trap 'rm -rf "$TEST_DIR"' EXIT
+  INIT_ROOT="$TEST_DIR/init.d"
+  mkdir -p "$INIT_ROOT"
+  # 测试替身：模拟 rc.common 的 enabled/restart，正文保留旧模板的 respawn 行。
+  write_old_init() {
+    # shellcheck disable=SC2016 # $1/$0 belong to the generated stub, not this shell.
+    printf '#!/bin/sh\ncase "$1" in\n  enabled) exit %s ;;\n  restart) echo "$0" >>"%s/restarted" ;;\nesac\nexit 0\nstart_service() {\n  procd_set_param respawn 3600 5 5\n}\n' "$2" "$TEST_DIR" >"$INIT_ROOT/$1"
+    chmod 755 "$INIT_ROOT/$1"
+  }
+  write_old_init ssrust-wgh-line1 0
+  write_old_init xray-wgh-paused 1
+  printf '#!/bin/sh\n# custom\nprocd_set_param respawn 1 2 3\n' >"$INIT_ROOT/ssrust-wgh-custom"
+  chmod 755 "$INIT_ROOT/ssrust-wgh-custom"
+  custom_before="$(cat "$INIT_ROOT/ssrust-wgh-custom")"
+
+  refresh_backend_services
+  grep -Fq 'procd_set_param respawn 3600 5 0' "$INIT_ROOT/ssrust-wgh-line1"
+  grep -Fq 'procd_add_interface_trigger "interface.*.up" "wgh_line1" /etc/init.d/ssrust-wgh-line1 restart' "$INIT_ROOT/ssrust-wgh-line1"
+  grep -Fq 'procd_add_interface_trigger "interface.*.up" "wgh_paused" /etc/init.d/xray-wgh-paused restart' "$INIT_ROOT/xray-wgh-paused"
+  assert_equal "$(cat "$TEST_DIR/restarted")" "$INIT_ROOT/ssrust-wgh-line1" "only enabled backends restart"
+  assert_equal "$(cat "$INIT_ROOT/ssrust-wgh-custom")" "$custom_before" "custom backend script untouched"
+
+  # 再跑一次不重复追加、不再重启。
+  refresh_backend_services
+  assert_equal "$(grep -c 'service_triggers()' "$INIT_ROOT/ssrust-wgh-line1")" 1 "trigger added once"
+  assert_equal "$(wc -l <"$TEST_DIR/restarted" | tr -d ' ')" 1 "refresh is idempotent"
+  leftovers=("$INIT_ROOT"/*.tmp.*)
+  if [[ -e "${leftovers[0]}" ]]; then echo 'FAIL: temporary file left behind' >&2; exit 1; fi
+)
+
 printf 'WAN/IP recovery tests PASS\n'

@@ -932,9 +932,14 @@ USE_PROCD=1
 start_service() {
   procd_open_instance
   procd_set_param command $backend_bin $(if [[ "$HOME_BACKEND" == "ss-rust" ]]; then printf '%s' '-c'; else printf '%s' 'run -c'; fi) $config_file
-  procd_set_param respawn 3600 5 5
+  procd_set_param respawn 3600 5 0
   procd_set_param limits nofile="1048576 1048576"
   procd_close_instance
+}
+
+# SS 服务端监听 WireGuard 地址：开机时常先于隧道启动而绑定失败，隧道每次 up 后重启。
+service_triggers() {
+  procd_add_interface_trigger "interface.*.up" "$WG_IFACE" /etc/init.d/$service_name restart
 }
 EOF
     chmod 755 "/etc/init.d/$service_name"

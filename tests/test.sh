@@ -276,6 +276,12 @@ deploy_functions="$(awk '/^valid_endpoint_host\(\) \{/,/^}/; /^valid_display_nam
   if valid_display_name $'a\nb'; then exit 1; fi
 )
 grep -Fq 'remote_node_state ssh_openwrt "$NODE_ID"' "$ROOT_DIR/wg-home-deploy.sh"
+# OpenWrt SS 服务端等 WireGuard：隧道 up 触发重启，respawn 不设上限。
+grep -Fq 'procd_add_interface_trigger "interface.*.up" "$WG_IFACE" /etc/init.d/$service_name restart' "$ROOT_DIR/wg-home-key-wizard.sh"
+grep -Fq 'procd_add_interface_trigger "interface.*.up" "$WG_IFACE" /etc/init.d/ssrust-wgh-$NODE_ID restart' "$ROOT_DIR/wg-home-deploy.sh"
+grep -Fq 'procd_add_interface_trigger "interface.*.up" "$WG_IFACE" /etc/init.d/xray-wgh-$NODE_ID restart' "$ROOT_DIR/wg-home-deploy.sh"
+if grep -Fq 'procd_set_param respawn 3600 5 5' "$ROOT_DIR/wg-home-key-wizard.sh" "$ROOT_DIR/wg-home-deploy.sh"; then echo 'FAIL: OpenWrt backend still gives up after 5 crashes' >&2; exit 1; fi
+grep -Fq 'refresh_backend_services || failed=1' "$ROOT_DIR/wg-home-wan-follow.sh"
 grep -Fq '[[ "$(remote_node_state ssh_openwrt "$candidate")" == free ]]' "$ROOT_DIR/wg-home-deploy.sh"
 grep -Fq '"$OWN_HOME_SS_PORT"' "$ROOT_DIR/wg-home-deploy.sh"
 grep -Fq "grep -Ev '[[:space:]]volwg-\${NODE_ID}[[:space:]]*" "$ROOT_DIR/wg-home-deploy.sh"
