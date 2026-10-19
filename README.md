@@ -98,6 +98,8 @@ v1.4.22 起，升级会自动刷新已启用的服务，并为仍在运行、从
 
 每条线路拥有独立的 `wgh-wan-节点ID` 服务。删除指定线路或执行 `volwg purge` 时，对应服务与配置会一并停止并归档。多条线路独立恢复，不会重启整个网络。Debian/Ubuntu 新建家宽线路同样使用 5 秒保活；此节的主动探测、WAN 跟随与故障重建服务目前仅支持 OpenWrt/ImmortalWrt。
 
+OpenWrt 家宽端的 SS 服务端（`ssrust-wgh-节点ID` / `xray-wgh-节点ID`）监听 WireGuard 地址。开机时它常比隧道先启动而绑定失败；从 v1.4.25 起，服务带 procd 接口触发器，WireGuard 接口每次 up（含开机、自动恢复重建）后都会重启服务端，失败重试也不再设上限。旧线路执行 `volwg update` 时自动补上，用户自行改过的服务脚本保持原样。
+
 ## 隧道内 SSH（默认关闭）
 
 完整部署会询问是否允许 VPS 通过该线路的 WireGuard 私网进入家宽机 SSH，默认选择“关闭”。开启时需要填写家宽机实际监听的 SSH 端口；这里填写设备内部端口，不是 FRP 映射后的外部端口。
@@ -305,7 +307,7 @@ VPS 与家宽机可以使用不同 SSH 私钥。交互向导会分别询问两�
 
 VPS 完成本机设置后，会输出一条**家宽机一键安装命令**，并等待家宽公钥。家宽机不需要事先安装 VolWG：把整行命令粘贴到家宽机的 root SSH 窗口执行即可（Debian/Ubuntu 普通用户先 `sudo -i`）。命令形如：
 
-    command -v bash >/dev/null 2>&1 || { opkg update && opkg install bash; }; VOLWG_PAIR_CODE='VOLWG1...' VOLWG_REF='v1.4.24' bash -c "$(curl -fsSL https://raw.githubusercontent.com/chnnic/volwg/v1.4.24/install.sh || wget -qO- …)" volwg pair --role home --yes
+    command -v bash >/dev/null 2>&1 || { opkg update && opkg install bash; }; VOLWG_PAIR_CODE='VOLWG1...' VOLWG_REF='v1.4.25' bash -c "$(curl -fsSL https://raw.githubusercontent.com/chnnic/volwg/v1.4.25/install.sh || wget -qO- …)" volwg pair --role home --yes
 
 它会：
 
