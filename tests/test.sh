@@ -106,8 +106,11 @@ if grep -Fq 'tcp_probe "$home_ip"' <<<"$ssh_function"; then
 fi
 grep -Fq '0\\.0\\.0\\.0|$WG_PREFIX\\.2|\\*|::' "$ROOT_DIR/wg-home-key-wizard.sh"
 grep -Fq 'dropbear.volwg_$NODE_ID.PasswordAuth=off' "$ROOT_DIR/wg-home-key-wizard.sh"
-grep -Fq 'BUILTIN_VERSION="1.4.24"' "$ROOT_DIR/volwg"
-grep -Fxq '1.4.24' "$ROOT_DIR/VERSION"
+# 版本号以 VERSION 为准：入口脚本内置版本与 README 家宽一键命令的 tag 必须一致。
+volwg_version="$(tr -d '[:space:]' <"$ROOT_DIR/VERSION")"
+[[ "$volwg_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+grep -Fq "BUILTIN_VERSION=\"$volwg_version\"" "$ROOT_DIR/volwg"
+grep -Fq "VOLWG_REF='v$volwg_version'" "$ROOT_DIR/README.md"
 grep -Fq '自动让 WireGuard endpoint 跟随当前优先级最高' < <(bash "$ROOT_DIR/wg-home-wan-follow.sh" --help)
 grep -Fq 'interface_has_carrier' "$ROOT_DIR/wg-home-wan-follow.sh"
 grep -Fq 'ip -4 route replace "$endpoint_ip/32"' "$ROOT_DIR/wg-home-wan-follow.sh"
