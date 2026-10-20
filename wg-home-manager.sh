@@ -3,6 +3,8 @@ set -Eeuo pipefail
 
 STATE_DIR="${WG_HOME_STATE_DIR:-/etc/wg-home-exit/nodes}"
 MANUAL_STATE_DIR="${WG_HOME_MANUAL_STATE_DIR:-/etc/wg-home-exit/manual}"
+WG_CONF_DIR="${WG_HOME_WG_DIR:-/etc/wireguard}"
+OPENWRT_RELEASE="${VOLWG_OPENWRT_RELEASE:-/etc/openwrt_release}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 die() {
@@ -52,7 +54,9 @@ usage() {
 用法：
   volwg manager list             查看所有线路
   volwg manager links            查看所有线路的 SS 链接
-  volwg manager show 节点ID      查看单条线路详情
+  volwg manager show 节点ID      查看单条线路详情（含 WireGuard 运行信息）
+  volwg manager wg-port ID [端口]
+                                 修改家宽机本地 WireGuard 端口（在家宽机执行）
   volwg manager status           查看 WireGuard 握手状态
   volwg manager diagnose ID      诊断 WG、SS、转发与家宽 SSH
   volwg manager ssh ID           通过 WireGuard 进入家宽机 SSH
@@ -403,6 +407,12 @@ list_nodes() {
     found=1
     name="$(decode "$(field "$file" DISPLAY_NAME_B64)")"
     iface="$(field "$file" WG_INTERFACE)"
+    if [[ "$(field "$file" ROLE)" == home && "$(field "$file" FULL_STACK)" == 1 ]]; then
+      backend="$(field "$file" HOME_BACKEND)"
+      endpoint="$(field "$file" WG_PREFIX).2:$(field "$file" HOME_SS_PORT)"
+      printf '%-10s %-24.24s %-8s %-9s %-18s %-22s %s\n' "$id" "$name" "家宽端" "${backend:-ss-rust}" "$iface" "$endpoint" "$(node_status "$iface")"
+      continue
+    fi
     printf '%-10s %-24.24s %-8s %-9s %-18s %-22s %s\n' "$id" "$name" "manual" "WG-only" "$iface" "未配置 SS" "$(node_status "$iface")"
   done
   if ((found == 0)) && [[ -f /etc/wireguard/wg-home.conf ]]; then
@@ -876,6 +886,411 @@ EOF
   echo "私网 SS：$private_link"
 }
 
+is_openwrt() {
+  command -v uci >/dev/null 2>&1 && { [[ -f "$OPENWRT_RELEASE" ]] || command -v opkg >/dev/null 2>&1; }
+}
+
+valid_node_id() {
+  [[ "$1" =~ ^[a-z0-9][a-z0-9_]{0,7}$ ]]
+}
+
+local_wg_interfaces() {
+  # 远程部署的家宽端没有本机线路记录，只能从接口、UCI 和 wg-quick 配置发现。
+  local conf
+  {
+    wg show interfaces 2>/dev/null | tr ' ' '\n'
+    if command -v uci >/dev/null 2>&1; then
+      uci -q show network 2>/dev/null | sed -n 's/^network\.\(wgh_[a-z0-9_]*\)=interface$/\1/p'
+    fi
+    for conf in "$WG_CONF_DIR"/wgh_*.conf; do
+      [[ -e "$conf" ]] && basename "$conf" .conf
+    done
+  } | grep '^wgh_' | sort -u || true
+}
+
+collect_local_nodes() {
+  # 输出“节点ID|记录文件”；记录优先 nodes/，其次 manual/，最后是没有记录的 wgh_* 接口。
+  local file id iface seen=" "
+  shopt -s nullglob
+  for file in "$STATE_DIR"/*.conf "$MANUAL_STATE_DIR"/*.conf; do
+    id="$(field "$file" NODE_ID)"
+    valid_node_id "$id" && [[ "$seen" != *" $id "* ]] || continue
+    seen+="$id "
+    printf '%s|%s\n' "$id" "$file"
+  done
+  while IFS= read -r iface; do
+    id="${iface#wgh_}"
+    valid_node_id "$id" && [[ "$seen" != *" $id "* ]] || continue
+    seen+="$id "
+    printf '%s|\n' "$id"
+  done < <(local_wg_interfaces)
+}
+
+node_kind_label() {
+  local file="$1" role full
+  if [[ -z "$file" ]]; then
+    printf '未登记接口'
+  elif [[ "$file" == "$STATE_DIR"/* ]]; then
+    printf 'VPS 完整线路'
+  else
+    role="$(field "$file" ROLE)"
+    full="$(field "$file" FULL_STACK)"
+    if [[ "$role" == home && "$full" == 1 ]]; then
+      printf '家宽端'
+    elif [[ "$role" == home ]]; then
+      printf '仅 WireGuard/家宽端'
+    else
+      printf '仅 WireGuard/%s' "${role:-未知端}"
+    fi
+  fi
+}
+
+choose_any_node() {
+  # 列出本机全部线路（含家宽端与未登记接口），支持序号或节点 ID。
+  local title="$1" entry id file name choice index=1
+  local -a entries
+  SELECTED_NODE="" SELECTED_FILE=""
+  mapfile -t entries < <(collect_local_nodes)
+  clear_screen
+  manager_header "$title"
+  if ((${#entries[@]} == 0)); then
+    echo "本机没有 VolWG 线路。"
+    pause_screen
+    return 1
+  fi
+  for entry in "${entries[@]}"; do
+    id="${entry%%|*}" file="${entry#*|}"
+    name="$id"
+    [[ -z "$file" ]] || name="$(decode "$(field "$file" DISPLAY_NAME_B64)")"
+    printf '  %d) %-24.24s  [%s / %s]\n' "$index" "${name:-$id}" "$id" "$(node_kind_label "$file")"
+    ((index++))
+  done
+  echo "  0) 返回线路菜单"
+  read -r -p "输入序号或节点 ID（0 返回） [0-${#entries[@]}]：" choice || return 1
+  [[ "$choice" == "0" || "$choice" == "q" || "$choice" == "Q" || -z "$choice" ]] && return 1
+  if [[ "$choice" =~ ^[0-9]+$ ]] && ((choice >= 1 && choice <= ${#entries[@]})); then
+    entry="${entries[choice-1]}"
+  else
+    entry=""
+    for file in "${entries[@]}"; do
+      [[ "${file%%|*}" == "$choice" ]] && entry="$file"
+    done
+  fi
+  [[ -n "$entry" ]] || { echo "选择无效：请输入列表序号或现有节点 ID。"; pause_screen; return 1; }
+  SELECTED_NODE="${entry%%|*}" SELECTED_FILE="${entry#*|}"
+}
+
+local_node_file() {
+  # 打印节点记录路径；没有记录但存在接口时返回空，找不到时报错。
+  local id="$1" entry
+  valid_node_id "$id" || die "节点 ID 无效"
+  while IFS= read -r entry; do
+    [[ "${entry%%|*}" == "$id" ]] || continue
+    printf '%s' "${entry#*|}"
+    return 0
+  done < <(collect_local_nodes)
+  die "找不到节点：$id"
+}
+
+human_bytes() {
+  awk -v bytes="$1" 'BEGIN {
+    split("B KiB MiB GiB TiB", unit, " "); i = 1
+    while (bytes >= 1024 && i < 5) { bytes /= 1024; i++ }
+    if (i == 1) printf "%d %s", bytes, unit[i]; else printf "%.1f %s", bytes, unit[i]
+  }'
+}
+
+handshake_text() {
+  local stamp="$1" age
+  [[ "$stamp" =~ ^[0-9]+$ && "$stamp" != 0 ]] || { printf '尚未握手'; return; }
+  age=$(($(date +%s) - stamp))
+  ((age >= 0)) || age=0
+  if ((age < 120)); then
+    printf '%s 秒前' "$age"
+  elif ((age < 7200)); then
+    printf '%s 分钟前' "$((age / 60))"
+  else
+    printf '%s 小时前' "$((age / 3600))"
+  fi
+}
+
+show_wg_runtime() {
+  # 只读取 wg 运行状态；dump 第一行第一列是本机私钥，绝不输出。
+  local iface="$1" first=1 col1 col2 col3 col4 col5 col6 col7 col8 configured
+  echo "WireGuard 运行信息（$iface）："
+  if ! command -v wg >/dev/null 2>&1 || ! wg show "$iface" >/dev/null 2>&1; then
+    echo "  接口未运行"
+    configured="$(configured_listen_port "$iface")"
+    [[ -z "$configured" ]] || echo "  配置的本机监听 UDP：$configured"
+    return 0
+  fi
+  while IFS=$'\t' read -r col1 col2 col3 col4 col5 col6 col7 col8; do
+    if ((first)); then
+      first=0
+      echo "  本机公钥：$col2"
+      echo "  本机监听 UDP：$col3"
+      continue
+    fi
+    echo "  对端公钥：$col1"
+    if [[ "$col3" == "(none)" ]]; then
+      echo "  对端 endpoint：未知（等待对端主动连接）"
+    else
+      echo "  对端 endpoint：$col3"
+    fi
+    echo "  AllowedIPs：$col4"
+    echo "  最近握手：$(handshake_text "$col5")"
+    echo "  流量：接收 $(human_bytes "$col6")，发送 $(human_bytes "$col7")"
+    if [[ "$col8" == off || -z "$col8" ]]; then
+      echo "  保活：关闭"
+    else
+      echo "  保活：$col8 秒"
+    fi
+  done < <(wg show "$iface" dump 2>/dev/null)
+  ((first == 0)) || echo "  无法读取运行状态（需要 root）"
+}
+
+configured_listen_port() {
+  local iface="$1"
+  if is_openwrt; then
+    uci -q get "network.$iface.listen_port" 2>/dev/null || true
+  elif [[ -f "$WG_CONF_DIR/$iface.conf" ]]; then
+    sed -n 's/^[[:space:]]*ListenPort[[:space:]]*=[[:space:]]*\([0-9]*\).*/\1/p' "$WG_CONF_DIR/$iface.conf" | head -n 1
+  fi
+}
+
+show_manual_node() {
+  local file="$1" id name role iface prefix full backend vps_endpoint vps_wg_port home_wg_port vps_ss_port home_ss_port public_ss remote_ssh ssh_port ssh_auth
+  id="$(field "$file" NODE_ID)"
+  name="$(decode "$(field "$file" DISPLAY_NAME_B64)")"
+  role="$(field "$file" ROLE)"
+  iface="$(field "$file" WG_INTERFACE)"; iface="${iface:-wgh_$id}"
+  prefix="$(field "$file" WG_PREFIX)"
+  full="$(field "$file" FULL_STACK)"
+  backend="$(field "$file" HOME_BACKEND)"
+  vps_endpoint="$(field "$file" VPS_ENDPOINT)"
+  vps_wg_port="$(field "$file" VPS_WG_PORT)"
+  home_wg_port="$(configured_listen_port "$iface")"
+  home_wg_port="${home_wg_port:-$(field "$file" HOME_WG_PORT)}"
+  vps_ss_port="$(field "$file" VPS_SS_PORT)"
+  home_ss_port="$(field "$file" HOME_SS_PORT)"
+  public_ss="$(field "$file" PUBLIC_SS_ENABLED)"
+  remote_ssh="$(field "$file" REMOTE_SSH_ENABLED)"
+  ssh_port="$(field "$file" HOME_SSH_PORT)"
+  ssh_auth="$(field "$file" REMOTE_SSH_AUTH)"
+
+  echo "线路名称：${name:-$id}"
+  echo "节点 ID：$id"
+  if [[ "$role" == home ]]; then
+    echo "本机角色：家宽端"
+  else
+    echo "本机角色：${role:-未知}"
+  fi
+  if [[ "$full" == 1 ]]; then
+    echo "部署类型：完整部署（WireGuard + SS2022）"
+  else
+    echo "部署类型：仅 WireGuard"
+  fi
+  echo "WireGuard：${iface}，${prefix:-?}.1（VPS）↔ ${prefix:-?}.2（家宽）"
+  echo "  VPS endpoint：${vps_endpoint:-未记录}:${vps_wg_port:-未记录}/UDP"
+  echo "  家宽机本地 UDP：${home_wg_port:-未记录}"
+  if [[ "$full" == 1 ]]; then
+    echo "家宽服务端：${backend:-ss-rust}，监听 ${prefix:-?}.2:${home_ss_port:-未记录}（TCP+UDP，仅隧道内可访问）"
+    if [[ "$public_ss" == 1 ]]; then
+      echo "VPS 公网 SS：${vps_endpoint:-未记录}:${vps_ss_port:-未记录}"
+    else
+      echo "VPS 公网 SS：未开放（仅私网）"
+    fi
+    if [[ "$remote_ssh" == 1 ]]; then
+      echo "隧道内 SSH：开启，端口 ${ssh_port:-22}（认证：${ssh_auth:-password}）"
+    else
+      echo "隧道内 SSH：关闭"
+    fi
+    [[ "$role" != home ]] || echo "SS 链接保存在 VPS：在 VPS 执行 volwg manager links 查看。"
+  fi
+  echo "状态：$(node_status "$iface")"
+}
+
+show_unregistered_node() {
+  local id="$1" iface="wgh_$1" endpoint=""
+  echo "节点 ID：$id"
+  echo "本机记录：未登记（通常是远程部署的家宽端）"
+  echo "WireGuard 接口：$iface"
+  if is_openwrt; then
+    endpoint="$(uci -q get "network.${iface}_vps.endpoint_host" 2>/dev/null || true)"
+    [[ -z "$endpoint" ]] || endpoint="$endpoint:$(uci -q get "network.${iface}_vps.endpoint_port" 2>/dev/null || true)"
+  elif [[ -f "$WG_CONF_DIR/$iface.conf" ]]; then
+    endpoint="$(sed -n 's/^[[:space:]]*Endpoint[[:space:]]*=[[:space:]]*//p' "$WG_CONF_DIR/$iface.conf" | head -n 1)"
+  fi
+  [[ -z "$endpoint" ]] || echo "  配置的 VPS endpoint：$endpoint"
+  echo "状态：$(node_status "$iface")"
+}
+
+show_line_details() {
+  local id="$1" file="$2" iface
+  if [[ -n "$file" && "$file" == "$STATE_DIR"/* ]]; then
+    show_node "$file"
+    iface="$(field "$file" WG_INTERFACE)"
+  elif [[ -n "$file" ]]; then
+    show_manual_node "$file"
+    iface="$(field "$file" WG_INTERFACE)"
+  else
+    show_unregistered_node "$id"
+  fi
+  echo
+  show_wg_runtime "${iface:-wgh_$id}"
+}
+
+home_port_in_use() {
+  # 家宽本机端口是否被占用：其他 WG 接口、系统 UDP 监听、其他线路记录与 UCI 配置。
+  local port="$1" iface="$2" node="$3" other listen_port hex table file state_node value line
+  while IFS= read -r other; do
+    [[ -n "$other" && "$other" != "$iface" ]] || continue
+    listen_port="$(wg show "$other" listen-port 2>/dev/null || true)"
+    [[ "$listen_port" == "$port" ]] && return 0
+  done < <(wg show interfaces 2>/dev/null | tr ' ' '\n')
+  printf -v hex '%04X' "$port"
+  for table in /proc/net/udp /proc/net/udp6; do
+    [[ -r "$table" ]] || continue
+    grep -Eqi "^[[:space:]]*[0-9]+:[[:space:]][0-9A-F]+:${hex}[[:space:]]" "$table" && return 0
+  done
+  shopt -s nullglob
+  for file in "$STATE_DIR"/*.conf "$MANUAL_STATE_DIR"/*.conf; do
+    state_node="$(field "$file" NODE_ID)"
+    [[ "$state_node" != "$node" ]] || continue
+    for value in "$(field "$file" HOME_WG_PORT)" "$(field "$file" HOME_SS_PORT)"; do
+      [[ "$value" == "$port" ]] && return 0
+    done
+  done
+  if command -v uci >/dev/null 2>&1; then
+    while IFS= read -r line; do
+      [[ "$line" == "network.$iface.listen_port="* ]] && continue
+      [[ "$line" == *".listen_port='$port'" || "$line" == *".listen_port=$port" ]] && return 0
+    done < <(uci -q show network 2>/dev/null | grep '\.listen_port=' || true)
+  fi
+  return 1
+}
+
+next_free_home_port() {
+  local port="$1" iface="$2" node="$3"
+  while home_port_in_use "$port" "$iface" "$node"; do
+    ((port++))
+    ((port <= 65535)) || die "没有找到可用端口，请手动指定"
+  done
+  printf '%s' "$port"
+}
+
+set_home_wg_port() {
+  # 修改家宽机本地 WireGuard 监听端口。家宽主动连接 VPS，VPS 会自动学习新的源端口，无需修改。
+  local id="$1" port="${2:-}" interactive=0 iface conf file="" kind current suggestion answer stamp tmp_file
+  valid_node_id "$id" || die "节点 ID 无效"
+  [[ "$(id -u)" == 0 ]] || die "修改端口需要 root，请使用 sudo"
+  iface="wgh_$id"
+  conf="$WG_CONF_DIR/$iface.conf"
+  [[ ! -f "$MANUAL_STATE_DIR/$id.conf" ]] || file="$MANUAL_STATE_DIR/$id.conf"
+  if [[ -n "$file" && "$(field "$file" ROLE)" == vps ]] || [[ -f "$STATE_DIR/$id.conf" ]]; then
+    die "线路 $id 在本机是 VPS 端；家宽 WireGuard 端口需要在家宽机上修改"
+  fi
+  if is_openwrt; then
+    [[ "$(uci -q get "network.$iface.proto" 2>/dev/null || true)" == wireguard ]] || die "本机没有家宽线路接口 $iface"
+    kind=openwrt
+  elif [[ -f "$conf" ]]; then
+    grep -Eq '^[[:space:]]*Endpoint[[:space:]]*=' "$conf" || die "$iface 没有 VPS Endpoint，不是家宽端配置"
+    kind=linux
+  else
+    die "本机没有家宽线路 $id"
+  fi
+  current="$(configured_listen_port "$iface")"
+  if [[ -z "$port" ]]; then
+    interactive=1
+    if [[ "$current" =~ ^[0-9]+$ ]] && ((current < 65535)); then
+      suggestion="$(next_free_home_port "$((current + 1))" "$iface" "$id")"
+    else
+      suggestion="$(next_free_home_port 51830 "$iface" "$id")"
+    fi
+    echo "线路 $id 当前家宽 WireGuard 本地端口：${current:-未设置（随机）}"
+    while true; do
+      read -r -p "新的本地 UDP 端口（直接 Enter 采用可用端口） [$suggestion]：" answer || die "输入已结束，未修改"
+      port="${answer:-$suggestion}"
+      if ! [[ "$port" =~ ^[0-9]+$ ]] || ((10#$port < 1 || 10#$port > 65535)); then
+        echo "端口必须是 1-65535 的数字。" >&2
+        continue
+      fi
+      port=$((10#$port))
+      if [[ "$port" != "$current" ]] && home_port_in_use "$port" "$iface" "$id"; then
+        echo "UDP $port 已被占用，请换一个；建议 ${suggestion}。" >&2
+        continue
+      fi
+      break
+    done
+  else
+    [[ "$port" =~ ^[0-9]+$ ]] && ((10#$port >= 1 && 10#$port <= 65535)) || die "端口必须是 1-65535 的数字"
+    port=$((10#$port))
+    if [[ "$port" != "$current" ]] && home_port_in_use "$port" "$iface" "$id"; then
+      die "UDP $port 已被占用；不带端口运行可自动选择可用端口"
+    fi
+  fi
+  if [[ "$port" == "$current" ]]; then
+    echo "端口未变化：$port"
+    return 0
+  fi
+  if ((interactive)); then
+    read -r -p "确认把线路 $id 的家宽本地端口从 ${current:-随机} 改为 ${port}？输入 yes 确认：" answer || die "输入已结束，未修改"
+    [[ "$answer" == yes ]] || { echo "已取消，未修改。"; return 0; }
+  fi
+
+  if [[ "$kind" == openwrt ]]; then
+    # 只提交本次修改；network 已有未保存的改动时拒绝，避免一并提交用户的其他配置。
+    [[ -z "$(uci changes network 2>/dev/null || true)" ]] || \
+      die "network 配置有未保存的修改（例如 LuCI 中未应用的更改）。请先保存或还原后再修改端口"
+    uci set "network.$iface.listen_port=$port"
+    uci commit network
+  else
+    stamp="$(date +%Y%m%d-%H%M%S)"
+    cp -p "$conf" "$conf.before.$stamp"
+    tmp_file="$(mktemp "$conf.volwg.XXXXXX")"
+    if grep -Eq '^[[:space:]]*ListenPort[[:space:]]*=' "$conf"; then
+      sed "s/^[[:space:]]*ListenPort[[:space:]]*=.*/ListenPort = $port/" "$conf" >"$tmp_file"
+    else
+      awk -v port="$port" '{print} /^\[Interface\]/ && !done {print "ListenPort = " port; done=1}' "$conf" >"$tmp_file"
+    fi
+    cat "$tmp_file" >"$conf"
+    rm -f "$tmp_file"
+  fi
+  if [[ -n "$file" ]]; then
+    tmp_file="$(mktemp "$file.volwg.XXXXXX")"
+    if grep -q '^HOME_WG_PORT=' "$file"; then
+      sed "s/^HOME_WG_PORT=.*/HOME_WG_PORT=$port/" "$file" >"$tmp_file"
+    else
+      { cat "$file"; printf 'HOME_WG_PORT=%s\n' "$port"; } >"$tmp_file"
+    fi
+    cat "$tmp_file" >"$file"
+    rm -f "$tmp_file"
+  fi
+
+  # 运行中的接口直接切换监听端口，不重启隧道；未运行时按新配置启动本线路。
+  if command -v wg >/dev/null 2>&1 && wg show "$iface" >/dev/null 2>&1; then
+    wg set "$iface" listen-port "$port" || die "已保存新端口，但运行中的接口切换失败；可执行 ifup $iface 或重启该线路"
+    echo "已切换线路 $id 的家宽本地端口为 UDP ${port}，隧道未重启。"
+  elif [[ "$kind" == openwrt ]]; then
+    ifup "$iface" >/dev/null 2>&1 || true
+    echo "已保存端口 UDP ${port}，并重新启动接口 ${iface}。"
+  else
+    systemctl restart "wg-quick@$iface.service" || die "已保存端口，但 wg-quick@$iface 启动失败，请检查 journalctl -u wg-quick@$iface"
+    echo "已保存端口 UDP ${port}，并重新启动 wg-quick@${iface}。"
+  fi
+  echo "VPS 无需修改：家宽主动连接 VPS，VPS 会自动使用新的来源端口。"
+  echo "VPS 线路详情中的「家宽机本地 UDP」是创建时的记录，仅供参考。"
+  [[ -n "$file" ]] || echo "提示：本机没有该线路记录（远程部署），已只修改接口配置。"
+}
+
+interactive_set_home_port() {
+  choose_any_node "修改家宽 WireGuard 端口" || return 0
+  clear_screen
+  manager_header "修改家宽 WireGuard 端口 · $SELECTED_NODE"
+  # 在子 shell 中执行：出错时只结束本次操作，回到菜单。
+  ( set_home_wg_port "$SELECTED_NODE" ) || true
+}
+
 menu() {
   local choice new_name export_choice export_format
   while true; do
@@ -885,15 +1300,16 @@ menu() {
     echo "  1) 查看全部公网/私网 SS 链接"
     echo "  2) 查看线路概览与状态"
     echo "  3) 导出 SS / Xray 图形化节点"
-    echo "  4) 查看单条线路详细配置"
+    echo "  4) 查看单条线路详情（含 WireGuard 运行信息）"
     echo "  5) 诊断线路（WG / SS / 转发 / SSH）"
     echo "  6) 通过 WireGuard 进入家宽机 SSH"
     echo "  7) 查看 WireGuard 握手状态"
     echo "  8) 修改线路/链接名称"
     echo "  9) 删除线路（停止服务并归档）"
     echo " 10) 登记旧版或手工线路"
+    echo " 11) 修改家宽 WireGuard 本地端口（在家宽机执行）"
     echo "  0) 返回上级菜单    q) 退出"
-    read -r -p "请选择 [0-10/q]：" choice
+    read -r -p "请选择 [0-11/q]：" choice
     echo
     case "$choice" in
       1) clear_screen; manager_header "全部 SS 链接"; list_links; pause_screen ;;
@@ -917,10 +1333,10 @@ menu() {
         pause_screen
         ;;
       4)
-        choose_node || continue
+        choose_any_node "选择线路" || continue
         clear_screen
         manager_header "线路详情 · $SELECTED_NODE"
-        show_node "$(node_file "$SELECTED_NODE")"
+        show_line_details "$SELECTED_NODE" "$SELECTED_FILE"
         pause_screen
         ;;
       5) interactive_diagnose; pause_screen ;;
@@ -937,6 +1353,7 @@ menu() {
         ;;
       9) interactive_delete; pause_screen ;;
       10) clear_screen; manager_header "登记已有线路"; register_node; pause_screen ;;
+      11) interactive_set_home_port; pause_screen ;;
       0) return ;;
       q|Q) clear_screen; exit 0 ;;
       *) echo "选择无效。"; pause_screen ;;
@@ -949,7 +1366,16 @@ command_name="${1:-menu}"
 case "$command_name" in
   list) list_nodes ;;
   links) list_links ;;
-  show) [[ -n "${2:-}" ]] || die "请提供节点 ID"; show_node "$(node_file "$2")" ;;
+  show) [[ -n "${2:-}" ]] || die "请提供节点 ID"; show_line_details "$2" "$(local_node_file "$2")" ;;
+  details-menu)
+    if choose_any_node "选择线路"; then
+      clear_screen
+      manager_header "线路详情 · $SELECTED_NODE"
+      show_line_details "$SELECTED_NODE" "$SELECTED_FILE"
+    fi
+    ;;
+  wg-port) [[ -n "${2:-}" ]] || die "用法：volwg manager wg-port ID [端口]"; set_home_wg_port "$2" "${3:-}" ;;
+  wg-port-menu) interactive_set_home_port ;;
   status) show_status ;;
   diagnose) [[ -n "${2:-}" ]] || die "用法：volwg manager diagnose ID [SSH端口]"; diagnose_node "$(node_file "$2")" "${3:-}" ;;
   diagnose-menu) interactive_diagnose ;;

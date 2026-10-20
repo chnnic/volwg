@@ -309,5 +309,98 @@ grep -Fq "grep -Ev '[[:space:]]volwg-\${NODE_ID}[[:space:]]*" "$ROOT_DIR/wg-home
 grep -Fq 'remove_line_ssh_keys' "$ROOT_DIR/wg-home-remove.sh"
 grep -Fq 'remove_line_ssh_keys' "$ROOT_DIR/wg-home-purge.sh"
 
+# 线路详情与家宽 WireGuard 端口修改：模拟 wg/uci/id，验证不泄露私钥、端口避让及只改本线路。
+(
+  MT="$TEST_DIR/manager"
+  mkdir -p "$MT/bin" "$MT/nodes" "$MT/manual" "$MT/wireguard"
+  home_name="$(printf '%s' '家宽一号' | base64 | tr -d '\r\n')"
+  printf '%s\n' 'NODE_ID=h1' "DISPLAY_NAME_B64=$home_name" 'ROLE=home' 'WG_INTERFACE=wgh_h1' \
+    'WG_PREFIX=10.88.3' 'VPS_WG_PORT=51830' 'HOME_WG_PORT=51830' 'VPS_ENDPOINT=vps.example.com' \
+    'FULL_STACK=1' 'MODE=relay' 'PUBLIC_SS_ENABLED=1' 'HOME_BACKEND=ss-rust' 'VPS_SS_PORT=31000' 'HOME_SS_PORT=31000' \
+    >"$MT/manual/h1.conf"
+  printf '%s\n' 'NODE_ID=h2' 'ROLE=home' 'WG_INTERFACE=wgh_h2' 'WG_PREFIX=10.88.4' 'HOME_WG_PORT=51832' \
+    'FULL_STACK=1' 'HOME_SS_PORT=31001' >"$MT/manual/h2.conf"
+  printf '%s\n' '[Interface]' 'Address = 10.88.3.2/24' 'ListenPort = 51830' 'PrivateKey = PRIVKEYSECRETVALUE=' \
+    '' '[Peer]' 'PublicKey = VPSPUB=' 'Endpoint = vps.example.com:51830' 'AllowedIPs = 10.88.3.1/32' \
+    >"$MT/wireguard/wgh_h1.conf"
+  printf '%s\n' '#!/bin/sh' '[ "$1" = "-u" ] && { echo 0; exit 0; }' 'exec /usr/bin/id "$@"' >"$MT/bin/id"
+  printf '%s\n' '#!/bin/sh' 'exit 0' >"$MT/bin/systemctl"
+  # shellcheck disable=SC2016 # Expanded by the fake wg at run time.
+  printf '%s\n' '#!/bin/sh' \
+    'case "$*" in' \
+    '  "show interfaces") echo "wgh_h1 wgh_h2" ;;' \
+    '  "show wgh_h1"|"show wgh_h2") exit 0 ;;' \
+    '  "show wgh_h1 dump") printf "PRIVKEYSECRETVALUE=\tHOMEPUB=\t51830\toff\n"; printf "VPSPUB=\t(none)\t198.51.100.10:51830\t10.88.3.1/32\t%s\t2048\t4096\t5\n" "$(date +%s)" ;;' \
+    '  "show wgh_h1 listen-port") echo 51830 ;;' \
+    '  "show wgh_h2 listen-port") echo 51832 ;;' \
+    '  "show wgh_h1 latest-handshakes") printf "VPSPUB=\t%s\n" "$(date +%s)" ;;' \
+    '  "set wgh_h1 listen-port "*) echo "$*" >>"$WG_SET_LOG" ;;' \
+    '  *) echo "unexpected wg $*" >&2; exit 1 ;;' \
+    'esac' >"$MT/bin/wg"
+  printf '%s\n' '#!/bin/sh' 'exit 0' >"$MT/bin/ip"
+  chmod 755 "$MT/bin/"*
+  run_manager() {
+    PATH="$MT/bin:$PATH" WG_SET_LOG="$MT/wg-set.log" WG_HOME_STATE_DIR="$MT/nodes" \
+      WG_HOME_MANUAL_STATE_DIR="$MT/manual" WG_HOME_WG_DIR="$MT/wireguard" \
+      VOLWG_OPENWRT_RELEASE="$MT/missing" bash "$ROOT_DIR/wg-home-manager.sh" "$@"
+  }
+
+  details="$(run_manager show h1)"
+  grep -Fq '本机角色：家宽端' <<<"$details"
+  grep -Fq '家宽一号' <<<"$details"
+  grep -Fq '本机监听 UDP：51830' <<<"$details"
+  grep -Fq '对端 endpoint：198.51.100.10:51830' <<<"$details"
+  grep -Fq '最近握手：' <<<"$details"
+  grep -Fq '流量：接收 2.0 KiB，发送 4.0 KiB' <<<"$details"
+  if grep -Fq 'PRIVKEYSECRETVALUE' <<<"$details"; then echo 'FAIL: details leaked private key' >&2; exit 1; fi
+  grep -Fq '家宽端' <<<"$(run_manager list)"
+
+  # 指定端口被另一条线路占用时拒绝；自动选择时跳过被占用端口。
+  if run_manager wg-port h1 51832 >/dev/null 2>&1; then echo 'FAIL: occupied port accepted' >&2; exit 1; fi
+  port_out="$(printf '\nyes\n' | run_manager wg-port h1)"
+  grep -Fq '隧道未重启' <<<"$port_out"
+  grep -Fxq 'ListenPort = 51831' "$MT/wireguard/wgh_h1.conf"
+  grep -Fxq 'PrivateKey = PRIVKEYSECRETVALUE=' "$MT/wireguard/wgh_h1.conf"
+  grep -Fxq 'HOME_WG_PORT=51831' "$MT/manual/h1.conf"
+  grep -Fxq 'HOME_WG_PORT=51832' "$MT/manual/h2.conf"
+  grep -Fxq 'set wgh_h1 listen-port 51831' "$MT/wg-set.log"
+  ls "$MT/wireguard"/wgh_h1.conf.before.* >/dev/null
+  run_manager wg-port h1 51840 >/dev/null
+  grep -Fxq 'ListenPort = 51840' "$MT/wireguard/wgh_h1.conf"
+
+  # VPS 端线路不能在本机修改家宽端口。
+  printf '%s\n' 'NODE_ID=v1' 'WG_INTERFACE=wgh_v1' >"$MT/nodes/v1.conf"
+  if run_manager wg-port v1 51850 >/dev/null 2>&1; then echo 'FAIL: changed home port on VPS record' >&2; exit 1; fi
+
+  # OpenWrt：network 有未保存修改时拒绝提交；否则只设置本线路 listen_port。
+  printf 'DISTRIB_ID=ImmortalWrt\n' >"$MT/openwrt_release"
+  # shellcheck disable=SC2016 # Expanded by the fake uci at run time.
+  printf '%s\n' '#!/bin/sh' \
+    'case "$*" in' \
+    '  "-q get network.wgh_h1.proto") echo wireguard ;;' \
+    '  "-q get network.wgh_h1.listen_port") cat "$UCI_PORT" ;;' \
+    '  "changes network") cat "$UCI_PENDING" 2>/dev/null ;;' \
+    '  "set network.wgh_h1.listen_port="*) echo "${2#*=}" >"$UCI_PORT"; echo "$*" >>"$UCI_LOG" ;;' \
+    '  "commit network") echo commit >>"$UCI_LOG" ;;' \
+    '  "-q show network") printf "network.wgh_h1=interface\nnetwork.wgh_h1.listen_port='"'"'%s'"'"'\nnetwork.lan.listen_port='"'"'51900'"'"'\n" "$(cat "$UCI_PORT")" ;;' \
+    '  *) exit 1 ;;' \
+    'esac' >"$MT/bin/uci"
+  chmod 755 "$MT/bin/uci"
+  printf '51830\n' >"$MT/uci-port"
+  run_openwrt() {
+    PATH="$MT/bin:$PATH" WG_SET_LOG="$MT/wg-set.log" UCI_PORT="$MT/uci-port" UCI_LOG="$MT/uci.log" \
+      UCI_PENDING="$MT/uci-pending" WG_HOME_STATE_DIR="$MT/empty" WG_HOME_MANUAL_STATE_DIR="$MT/empty" \
+      WG_HOME_WG_DIR="$MT/empty" VOLWG_OPENWRT_RELEASE="$MT/openwrt_release" bash "$ROOT_DIR/wg-home-manager.sh" "$@"
+  }
+  mkdir -p "$MT/empty"
+  printf 'network.lan.ipaddr=10.0.0.1\n' >"$MT/uci-pending"
+  if run_openwrt wg-port h1 51833 >/dev/null 2>&1; then echo 'FAIL: committed over pending UCI changes' >&2; exit 1; fi
+  rm -f "$MT/uci-pending"
+  if run_openwrt wg-port h1 51900 >/dev/null 2>&1; then echo 'FAIL: reused another UCI listen_port' >&2; exit 1; fi
+  run_openwrt wg-port h1 51833 >/dev/null
+  grep -Fxq 'set network.wgh_h1.listen_port=51833' "$MT/uci.log"
+  grep -Fxq 'commit' "$MT/uci.log"
+)
+
 bash "$ROOT_DIR/tests/wan-follow.sh"
 echo "VolWG tests: PASS"

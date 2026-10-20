@@ -307,7 +307,7 @@ VPS 与家宽机可以使用不同 SSH 私钥。交互向导会分别询问两�
 
 VPS 完成本机设置后，会输出一条**家宽机一键安装命令**，并等待家宽公钥。家宽机不需要事先安装 VolWG：把整行命令粘贴到家宽机的 root SSH 窗口执行即可（Debian/Ubuntu 普通用户先 `sudo -i`）。命令形如：
 
-    command -v bash >/dev/null 2>&1 || { if command -v opkg >/dev/null 2>&1; then opkg update && opkg install bash; else apk update && apk add bash; fi; }; VOLWG_PAIR_CODE='VOLWG1...' VOLWG_REF='v1.4.26' bash -c "$(curl -fsSL https://raw.githubusercontent.com/chnnic/volwg/v1.4.26/install.sh || wget -qO- …)" volwg pair --role home --yes
+    command -v bash >/dev/null 2>&1 || { if command -v opkg >/dev/null 2>&1; then opkg update && opkg install bash; else apk update && apk add bash; fi; }; VOLWG_PAIR_CODE='VOLWG1...' VOLWG_REF='v1.4.27' bash -c "$(curl -fsSL https://raw.githubusercontent.com/chnnic/volwg/v1.4.27/install.sh || wget -qO- …)" volwg pair --role home --yes
 
 它会：
 
@@ -467,6 +467,21 @@ SSH 可能短暂断开，重新连接后使用以下命令检查：
 - 一行配对码：包含 VPS WireGuard 公钥和 SS2022 密钥，只能在自己的两个 SSH 窗口间传递。
 
 SS2022、SSH 私钥和 WireGuard 私钥均属于敏感信息，不要公开。
+
+## 查看线路与修改家宽端口
+
+VPS 和家宽机都可以查看本机线路详情：
+
+    volwg manager show 节点ID
+
+或在菜单选择“线路管理 → 查看线路详情”。除了网段、端口和 SS 信息外，还会显示 WireGuard 运行状态：本机监听端口、对端 endpoint、最近握手、收发流量和保活间隔；私钥不会显示。家宽机上由远程部署创建、没有本机记录的线路，也会按 `wgh_节点ID` 接口列出。
+
+创建线路时，家宽机 WireGuard 本地端口被占用会自动顺延到可用端口。线路建好后需要更换（例如端口被其他程序占用，或运营商只放行特定端口），在**家宽机**执行：
+
+    volwg manager wg-port 节点ID          # 自动建议可用端口，确认后修改
+    volwg manager wg-port 节点ID 51900    # 指定端口
+
+也可在菜单选择“线路管理 → 修改家宽 WireGuard 本地端口”。端口会避开系统已监听的 UDP 端口、其他 WireGuard 接口和其他线路记录。接口运行中时直接切换监听端口，不重启隧道；VPS 无需任何修改，家宽主动连接后 VPS 会自动使用新的来源端口。OpenWrt 若 network 存在未保存的修改（例如 LuCI 中未应用的更改），会拒绝修改，以免一并提交；Linux 家宽会先备份 wg-quick 配置。
 
 ## 删除线路
 
