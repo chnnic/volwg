@@ -52,7 +52,7 @@ root 用户安装到 `/usr/local/bin/volwg`；OpenWrt root 安装到 `/usr/bin/v
 
 家宽端：
 
-- OpenWrt / ImmortalWrt
+- OpenWrt / ImmortalWrt（opkg 版本，以及改用 apk 的 25.x/快照）
 - Debian 11
 - Debian 12
 - Debian 13
@@ -307,11 +307,11 @@ VPS 与家宽机可以使用不同 SSH 私钥。交互向导会分别询问两�
 
 VPS 完成本机设置后，会输出一条**家宽机一键安装命令**，并等待家宽公钥。家宽机不需要事先安装 VolWG：把整行命令粘贴到家宽机的 root SSH 窗口执行即可（Debian/Ubuntu 普通用户先 `sudo -i`）。命令形如：
 
-    command -v bash >/dev/null 2>&1 || { opkg update && opkg install bash; }; VOLWG_PAIR_CODE='VOLWG1...' VOLWG_REF='v1.4.25' bash -c "$(curl -fsSL https://raw.githubusercontent.com/chnnic/volwg/v1.4.25/install.sh || wget -qO- …)" volwg pair --role home --yes
+    command -v bash >/dev/null 2>&1 || { if command -v opkg >/dev/null 2>&1; then opkg update && opkg install bash; else apk update && apk add bash; fi; }; VOLWG_PAIR_CODE='VOLWG1...' VOLWG_REF='v1.4.26' bash -c "$(curl -fsSL https://raw.githubusercontent.com/chnnic/volwg/v1.4.26/install.sh || wget -qO- …)" volwg pair --role home --yes
 
 它会：
 
-1. OpenWrt 缺少 bash 时先用 opkg 安装；
+1. OpenWrt 缺少 bash 时先安装（opkg；OpenWrt/ImmortalWrt 25.x 使用 apk）；
 2. 安装与 VPS 相同版本的 VolWG（curl 或 wget 均可）；
 3. 读取命令中的配对码，自动安装 WireGuard、SS 服务端和换 IP 自动恢复，不再逐项询问；
 4. 结束时框出家宽公钥，复制这一行粘贴回仍在等待的 VPS 窗口，线路即完成。

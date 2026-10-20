@@ -47,7 +47,7 @@ WAN_FOLLOW_SERVICE="wgh-wan-$NODE_ID"
 MANUAL_STATE="/etc/wg-home-exit/manual/$NODE_ID.conf"
 NODE_STATE="$STATE_DIR/$NODE_ID.conf"
 SYSTEM_KIND="linux"
-if command -v uci >/dev/null 2>&1 && command -v opkg >/dev/null 2>&1; then
+if command -v uci >/dev/null 2>&1 && { [[ -f /etc/openwrt_release ]] || command -v opkg >/dev/null 2>&1; }; then
   SYSTEM_KIND="openwrt"
 fi
 

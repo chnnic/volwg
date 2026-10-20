@@ -166,6 +166,27 @@ valid_wg_prefix() {
   ((10#$first <= 255 && 10#$second <= 255 && 10#$third <= 255))
 }
 
+openwrt_pkg_update() {
+  # OpenWrt/ImmortalWrt 24.x 及以前使用 opkg；25.x 与快照改用 apk。
+  if command -v opkg >/dev/null 2>&1; then
+    opkg update
+  elif command -v apk >/dev/null 2>&1; then
+    apk update
+  else
+    return 127
+  fi
+}
+
+openwrt_pkg_install() {
+  if command -v opkg >/dev/null 2>&1; then
+    opkg install "$@"
+  elif command -v apk >/dev/null 2>&1; then
+    apk add "$@"
+  else
+    return 127
+  fi
+}
+
 valid_display_name() {
   # 名称会写入 WireGuard/UCI 配置；拒绝换行等控制字符，防止配对码注入配置行。
   local LC_ALL=C name="$1"
@@ -246,7 +267,7 @@ home_install_command() {
     ref="main"
   fi
   url="https://raw.githubusercontent.com/chnnic/volwg/$ref/install.sh"
-  printf '%s' "command -v bash >/dev/null 2>&1 || { opkg update && opkg install bash; }; "
+  printf '%s' "command -v bash >/dev/null 2>&1 || { if command -v opkg >/dev/null 2>&1; then opkg update && opkg install bash; else apk update && apk add bash; fi; }; "
   printf "VOLWG_PAIR_CODE='%s' VOLWG_REF='%s' bash -c \"\$(curl -fsSL %s || wget -qO- %s)\" volwg pair --role home --yes" \
     "$code" "$ref" "$url" "$url"
 }
@@ -789,14 +810,14 @@ install_ssrust() {
   fi
   machine="$(uname -m)"
   if [[ "$SYSTEM_KIND" == "openwrt" ]]; then
-    opkg update >/dev/null 2>&1 || true
-    if opkg install shadowsocks-rust-ssserver >/dev/null 2>&1; then
+    openwrt_pkg_update >/dev/null 2>&1 || true
+    if openwrt_pkg_install shadowsocks-rust-ssserver >/dev/null 2>&1; then
       hash -r 2>/dev/null || true
     fi
     if find_working_ssserver >/dev/null; then
       return
     fi
-    opkg install ca-bundle curl xz >/dev/null 2>&1 || opkg install ca-bundle curl xz-utils >/dev/null 2>&1 || true
+    openwrt_pkg_install ca-bundle curl xz >/dev/null 2>&1 || openwrt_pkg_install ca-bundle curl xz-utils >/dev/null 2>&1 || true
     case "$machine" in
       x86_64) target="x86_64-unknown-linux-musl" ;;
       aarch64) target="aarch64-unknown-linux-musl" ;;
@@ -852,8 +873,8 @@ install_xray() {
   xray_bin="$(command -v xray 2>/dev/null || true)"
   [[ -n "$xray_bin" ]] && return
   if [[ "$SYSTEM_KIND" == "openwrt" ]]; then
-    opkg update >/dev/null
-    opkg install xray-core >/dev/null
+    openwrt_pkg_update >/dev/null
+    openwrt_pkg_install xray-core >/dev/null
   else
     export DEBIAN_FRONTEND=noninteractive
     apt-get update >/dev/null
@@ -1247,7 +1268,8 @@ else
 fi
 echo
 
-if command -v uci >/dev/null 2>&1 && command -v opkg >/dev/null 2>&1; then
+# 以 UCI + openwrt_release 识别 OpenWrt/ImmortalWrt；新版用 apk 取代 opkg，不能依赖 opkg 判断。
+if command -v uci >/dev/null 2>&1 && { [[ -f /etc/openwrt_release ]] || command -v opkg >/dev/null 2>&1; }; then
   SYSTEM_KIND="openwrt"
 elif [[ -r /etc/os-release ]] && command -v systemctl >/dev/null 2>&1; then
   # shellcheck disable=SC1091
@@ -1318,8 +1340,8 @@ if ! command -v wg >/dev/null 2>&1; then
     echo "[2/5] 正在自动安装 WireGuard"
   fi
   if [[ "$SYSTEM_KIND" == "openwrt" ]]; then
-    opkg update
-    opkg install wireguard-tools
+    openwrt_pkg_update
+    openwrt_pkg_install wireguard-tools
   else
     export DEBIAN_FRONTEND=noninteractive
     apt-get update
