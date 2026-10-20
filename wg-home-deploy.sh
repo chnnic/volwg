@@ -470,6 +470,11 @@ echo free")" || die "无法检查节点 $candidate 是否已存在，未修改�
   printf '%s' "$result"
 }
 
+ssh_openwrt_pkg_add() {
+  # 软件包名为固定字面量；远程按 opkg 或 apk（OpenWrt 25.x）选择安装方式。
+  ssh_openwrt "if command -v opkg >/dev/null 2>&1; then opkg update >/dev/null && opkg install $* >/dev/null; else apk update >/dev/null && apk add $* >/dev/null; fi"
+}
+
 find_remote_free_node_id() {
   local number candidate
   for ((number=1; number<=99; number++)); do
@@ -707,7 +712,7 @@ vps_os="$(ssh_vps '. /etc/os-release 2>/dev/null; printf "%s" "${ID:-unknown}"')
 [[ "$vps_os" == "debian" || "$vps_os" == "ubuntu" ]] || die "VPS 仅支持 Debian/Ubuntu，检测到：$vps_os"
 # 系统变量必须在远程家宽机展开。
 # shellcheck disable=SC2016
-home_kind="$(ssh_openwrt 'if command -v uci >/dev/null 2>&1 && command -v opkg >/dev/null 2>&1; then echo openwrt; elif test -r /etc/os-release && command -v systemctl >/dev/null 2>&1; then . /etc/os-release; case "${ID:-}:${VERSION_ID:-}" in debian:11|debian:12|debian:13|ubuntu:*) echo linux ;; *) echo unsupported ;; esac; else echo unsupported; fi')"
+home_kind="$(ssh_openwrt 'if command -v uci >/dev/null 2>&1 && { test -f /etc/openwrt_release || command -v opkg >/dev/null 2>&1; }; then echo openwrt; elif test -r /etc/os-release && command -v systemctl >/dev/null 2>&1; then . /etc/os-release; case "${ID:-}:${VERSION_ID:-}" in debian:11|debian:12|debian:13|ubuntu:*) echo linux ;; *) echo unsupported ;; esac; else echo unsupported; fi')"
 [[ "$home_kind" == "openwrt" || "$home_kind" == "linux" ]] || die "家宽端仅支持 OpenWrt/ImmortalWrt、Debian 11/12/13 或 Ubuntu"
 echo "检测到家宽端类型：$home_kind"
 
@@ -784,13 +789,20 @@ if command -v ssserver >/dev/null 2>&1; then
 fi
 
 machine="$(uname -m)"
+# OpenWrt/ImmortalWrt 24.x 及以前使用 opkg；25.x 与快照改用 apk。
+PKG_UPDATE="" PKG_ADD=""
 if command -v opkg >/dev/null 2>&1; then
-  opkg update >/dev/null 2>&1 || true
-  opkg install shadowsocks-rust-ssserver >/dev/null 2>&1 || true
+  PKG_UPDATE="opkg update" PKG_ADD="opkg install"
+elif command -v apk >/dev/null 2>&1 && test -f /etc/openwrt_release; then
+  PKG_UPDATE="apk update" PKG_ADD="apk add"
+fi
+if test -n "$PKG_ADD"; then
+  $PKG_UPDATE >/dev/null 2>&1 || true
+  $PKG_ADD shadowsocks-rust-ssserver >/dev/null 2>&1 || true
   if find_working_ssserver >/dev/null 2>&1; then
     exit 0
   fi
-  opkg install ca-bundle curl xz >/dev/null 2>&1 || opkg install ca-bundle curl xz-utils >/dev/null 2>&1 || true
+  $PKG_ADD ca-bundle curl xz >/dev/null 2>&1 || $PKG_ADD ca-bundle curl xz-utils >/dev/null 2>&1 || true
   case "$machine" in
     x86_64) target="x86_64-unknown-linux-musl" ;;
     aarch64) target="aarch64-unknown-linux-musl" ;;
@@ -832,10 +844,10 @@ openwrt_had_wg="1"
 if [[ "$home_kind" == "openwrt" ]]; then
   if ! ssh_openwrt "command -v wg >/dev/null"; then
     openwrt_had_wg="0"
-    ssh_openwrt "opkg update >/dev/null && opkg install wireguard-tools >/dev/null"
+    ssh_openwrt_pkg_add wireguard-tools
   fi
   if [[ "$HOME_BACKEND" == "xray" ]] && ! ssh_openwrt "command -v xray >/dev/null"; then
-    ssh_openwrt "opkg update >/dev/null && opkg install xray-core >/dev/null"
+    ssh_openwrt_pkg_add xray-core
   fi
 else
   ssh_openwrt "export DEBIAN_FRONTEND=noninteractive; apt-get update >/dev/null; apt-get install -y wireguard-tools nftables iptables ca-certificates >/dev/null"

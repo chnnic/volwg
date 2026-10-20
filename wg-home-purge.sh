@@ -40,7 +40,7 @@ done
 [[ "$(id -u)" == "0" ]] || die "清理配置需要 root，请使用 sudo"
 
 SYSTEM_KIND="linux"
-if command -v uci >/dev/null 2>&1 && command -v opkg >/dev/null 2>&1; then
+if command -v uci >/dev/null 2>&1 && { [[ -f /etc/openwrt_release ]] || command -v opkg >/dev/null 2>&1; }; then
   SYSTEM_KIND="openwrt"
 fi
 

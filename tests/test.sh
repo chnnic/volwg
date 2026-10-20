@@ -263,7 +263,25 @@ pair_functions="$(awk '/^while \(\(\$#\)\); do/{exit} {print}' "$ROOT_DIR/wg-hom
   grep -Fq 'ARGS=volwg|ARGS=pair|ARGS=--role|ARGS=home|ARGS=--yes|' <<<"$home_run"
   grep -Fq -- "--yes|REF=v$(cat "$ROOT_DIR/VERSION")" <<<"$home_run"
   grep -Fxq "CODE=$pair_code" <<<"$home_run"
+  grep -Fq 'apk update && apk add bash' <<<"$home_command"
+
+  # OpenWrt/ImmortalWrt 25.x 没有 opkg，改用 apk 安装软件包。
+  apk_bin="$TEST_DIR/apk-bin"
+  mkdir -p "$apk_bin"
+  printf '%s\n' '#!/bin/sh' 'printf "apk %s\n" "$*"' >"$apk_bin/apk"
+  chmod 755 "$apk_bin/apk"
+  if ! command -v opkg >/dev/null 2>&1; then
+    [[ "$(PATH="$apk_bin:$PATH" openwrt_pkg_install wireguard-tools)" == "apk add wireguard-tools" ]]
+    [[ "$(PATH="$apk_bin:$PATH" openwrt_pkg_update)" == "apk update" ]]
+  fi
 )
+for openwrt_script in wg-home-key-wizard.sh wg-home-remove.sh wg-home-purge.sh; do
+  grep -Fq 'command -v uci >/dev/null 2>&1 && { [[ -f /etc/openwrt_release ]] || command -v opkg >/dev/null 2>&1; }' "$ROOT_DIR/$openwrt_script"
+done
+grep -Fq 'command -v uci >/dev/null 2>&1 && { test -f /etc/openwrt_release || command -v opkg >/dev/null 2>&1; }' "$ROOT_DIR/wg-home-deploy.sh"
+if grep -Eq 'command -v uci >/dev/null 2>&1 && command -v opkg' "$ROOT_DIR"/*.sh; then
+  echo 'FAIL: OpenWrt detection still requires opkg' >&2; exit 1
+fi
 code_role_output="$(bash "$ROOT_DIR/wg-home-key-wizard.sh" --full --role vps --code VOLWG1.x 2>&1 || true)"
 grep -Fq -- '--code 只用于家宽机完整部署' <<<"$code_role_output"
 grep -Fq -- '--code VOLWG1' < <(bash "$ROOT_DIR/wg-home-key-wizard.sh" --help)
