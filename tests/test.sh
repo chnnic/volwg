@@ -287,6 +287,7 @@ grep -Fq -- '--code 只用于家宽机完整部署' <<<"$code_role_output"
 grep -Fq -- '--code VOLWG1' < <(bash "$ROOT_DIR/wg-home-key-wizard.sh" --help)
 grep -Fq '【推荐】家宽机一键安装命令' "$ROOT_DIR/wg-home-key-wizard.sh"
 grep -Fq 'volwg pair --role vps    VPS 先配置' "$ROOT_DIR/volwg"
+grep -Fxq 'MODE="relay"' "$ROOT_DIR/wg-home-deploy.sh"
 
 deploy_functions="$(awk '/^valid_endpoint_host\(\) \{/,/^}/; /^valid_display_name\(\) \{/,/^}/' "$ROOT_DIR/wg-home-deploy.sh")"
 (
@@ -371,6 +372,34 @@ grep -Fq 'remove_line_ssh_keys' "$ROOT_DIR/wg-home-purge.sh"
   # VPS 端线路不能在本机修改家宽端口。
   printf '%s\n' 'NODE_ID=v1' 'WG_INTERFACE=wgh_v1' >"$MT/nodes/v1.conf"
   if run_manager wg-port v1 51850 >/dev/null 2>&1; then echo 'FAIL: changed home port on VPS record' >&2; exit 1; fi
+
+  # 切换推荐入口：只改默认链接/outbound，两套链接保留；relay 需要公网 SS。
+  b64() { printf '%s' "$1" | base64 | tr -d '\r\n'; }
+  printf '%s\n' 'NODE_ID=m1' 'MODE=direct' 'PUBLIC_SS_ENABLED=1' 'WG_INTERFACE=wgh_m1' 'WG_PREFIX=10.88.9' \
+    'VPS_SS_PORT=31009' 'HOME_SS_PORT=32009' 'SS_PORT=32009' 'SS_ENDPOINT=10.88.9.2:32009' \
+    "SS_LINK_B64=$(b64 'ss://private-link')" "XRAY_OUTBOUND_B64=$(b64 '{"tag": "home-m1", "address": "10.88.9.2"}')" \
+    'PUBLIC_SS_ENDPOINT=203.0.113.10:31009' 'PRIVATE_SS_ENDPOINT=10.88.9.2:32009' \
+    "PUBLIC_SS_LINK_B64=$(b64 'ss://public-link')" "PRIVATE_SS_LINK_B64=$(b64 'ss://private-link')" \
+    "PUBLIC_XRAY_OUTBOUND_B64=$(b64 '{"tag": "home-m1-public", "address": "203.0.113.10"}')" \
+    "PRIVATE_XRAY_OUTBOUND_B64=$(b64 '{"tag": "home-m1-private", "address": "10.88.9.2"}')" >"$MT/nodes/m1.conf"
+  printf '%s\n' 'NODE_ID=m1' 'ROLE=vps' 'MODE=direct' >"$MT/manual/m1.conf"
+  m1_before="$(grep -vE '^(MODE|SS_ENDPOINT|SS_PORT|SS_LINK_B64|XRAY_OUTBOUND_B64)=' "$MT/nodes/m1.conf")"
+  run_manager mode m1 relay >/dev/null
+  grep -Fxq 'MODE=relay' "$MT/nodes/m1.conf"
+  grep -Fxq 'MODE=relay' "$MT/manual/m1.conf"
+  grep -Fxq 'SS_ENDPOINT=203.0.113.10:31009' "$MT/nodes/m1.conf"
+  grep -Fxq 'SS_PORT=31009' "$MT/nodes/m1.conf"
+  grep -Fxq "SS_LINK_B64=$(b64 'ss://public-link')" "$MT/nodes/m1.conf"
+  [[ "$(sed -n 's/^XRAY_OUTBOUND_B64=//p' "$MT/nodes/m1.conf" | base64 -d)" == '{"tag": "home-m1", "address": "203.0.113.10"}' ]]
+  [[ "$m1_before" == "$(grep -vE '^(MODE|SS_ENDPOINT|SS_PORT|SS_LINK_B64|XRAY_OUTBOUND_B64)=' "$MT/nodes/m1.conf")" ]]
+  ls "$MT/nodes"/m1.conf.before-mode.* >/dev/null
+  grep -Fq '已是 relay' <<<"$(run_manager mode m1 relay)"
+  run_manager mode m1 direct >/dev/null
+  grep -Fxq 'SS_ENDPOINT=10.88.9.2:32009' "$MT/nodes/m1.conf"
+  [[ "$(sed -n 's/^XRAY_OUTBOUND_B64=//p' "$MT/nodes/m1.conf" | base64 -d)" == '{"tag": "home-m1", "address": "10.88.9.2"}' ]]
+  sed -i.bak 's/^PUBLIC_SS_ENABLED=1/PUBLIC_SS_ENABLED=0/' "$MT/nodes/m1.conf"
+  if run_manager mode m1 relay >/dev/null 2>&1; then echo 'FAIL: relay without public SS' >&2; exit 1; fi
+  if run_manager mode h1 relay >/dev/null 2>&1; then echo 'FAIL: mode changed on home record' >&2; exit 1; fi
 
   # OpenWrt：network 有未保存修改时拒绝提交；否则只设置本线路 listen_port。
   printf 'DISTRIB_ID=ImmortalWrt\n' >"$MT/openwrt_release"
