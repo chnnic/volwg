@@ -6,7 +6,7 @@ set -Eeuo pipefail
 #   relay  - 推荐使用公网 SS 链接，同时也生成 WireGuard 私网链接
 #   direct - 推荐使用 WireGuard 私网链接，同时也可生成公网 SS 链接
 
-MODE=""
+MODE="relay"
 VPS_TARGET=""
 VPS_SSH_PORT="22"
 VPS_PUBLIC_HOST=""
@@ -42,19 +42,20 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 usage() {
   cat <<'EOF'
 用法：
-  volwg deploy --mode relay|direct \
+  volwg deploy [--mode relay|direct] \
     --node 节点ID --name "线路显示名称" \
     --vps root@VPS地址 --vps-public-host VPS公网IP或域名 \
     --home root@家宽机地址 [选项]
 
 必需参数：
-  --mode relay|direct       选择推荐入口；默认都生成公网和私网 SS 链接
   --vps USER@HOST          可 SSH/root 的 Debian 或 Ubuntu VPS
   --vps-public-host HOST   WireGuard endpoint，也是公网 SS 链接地址
   --home USER@HOST         可 SSH/root 的家宽机
                             支持 OpenWrt/ImmortalWrt、Debian 11/12/13、Ubuntu
 
 选项：
+  --mode relay|direct       推荐入口，默认 relay（公网）；两套链接都会生成，
+                            以后可用 volwg manager mode 切换
   --node ID                 节点 ID，1-8 位小写字母/数字/_，默认 home1
   --name NAME               SS 链接和管理后台显示名称，默认“家宽线路 1”
   --vps-ssh-port PORT       VPS SSH 端口，默认 22
@@ -216,8 +217,8 @@ guided_full_deploy() {
   fi
   echo
   echo "部署结构："
-  echo "  1) relay：推荐公网 SS 入口（同时生成私网入口）"
-  echo "  2) direct：推荐 WireGuard 私网入口（同时生成公网入口）"
+  echo "  1) relay：推荐公网 SS 入口，手机/电脑/其他 VPS 都能用（推荐，同时生成私网入口）"
+  echo "  2) direct：推荐 WireGuard 私网入口，只有本 VPS 上的 Xray 能用（同时生成公网入口）"
   read -r -p "请选择 [1-2，默认 1]：" mode_choice
   case "${mode_choice:-1}" in
     1) MODE="relay" ;;

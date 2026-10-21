@@ -168,6 +168,17 @@ OpenWrt 如果原有 Dropbear 只绑定 LAN 接口，即使相同端口已被占
 
 优化 VPS 必须拥有 root/SSH。脚本会输出可加入优化机 Xray JSON 的 WireGuard 私网 outbound，同时默认保留公网转发和公网链接；direct 仅表示默认推荐私网入口。若确定不需要公网访问，可使用 `--public-ss off` 关闭公网转发。
 
+### 默认模式与切换
+
+新建线路默认使用 relay（向导直接回车、远程部署省略 `--mode` 时均为 relay）。两套链接始终同时生成，模式只决定默认推荐哪一条：`volwg manager list` 显示的地址、默认 SS 链接和默认 Xray outbound。
+
+已有线路可以在 VPS 上随时切换，不影响隧道、转发规则和 SS 密钥，两条链接都继续可用：
+
+    volwg manager mode 节点ID relay     # 默认推荐公网链接
+    volwg manager mode 节点ID direct    # 默认推荐私网链接
+
+也可在菜单选择“线路管理 → 切换推荐入口”。切换前会备份线路记录；未开放公网 SS 的线路不能切换为 relay。
+
 ## 公网与私网 SS 链接
 
 每次新部署默认生成两套入口，它们使用同一台家宽机上的 SS2022 服务、同一密钥和同一出口：
@@ -307,7 +318,7 @@ VPS 与家宽机可以使用不同 SSH 私钥。交互向导会分别询问两�
 
 VPS 完成本机设置后，会输出一条**家宽机一键安装命令**，并等待家宽公钥。家宽机不需要事先安装 VolWG：把整行命令粘贴到家宽机的 root SSH 窗口执行即可（Debian/Ubuntu 普通用户先 `sudo -i`）。命令形如：
 
-    command -v bash >/dev/null 2>&1 || { if command -v opkg >/dev/null 2>&1; then opkg update && opkg install bash; else apk update && apk add bash; fi; }; VOLWG_PAIR_CODE='VOLWG1...' VOLWG_REF='v1.4.27' bash -c "$(curl -fsSL https://raw.githubusercontent.com/chnnic/volwg/v1.4.27/install.sh || wget -qO- …)" volwg pair --role home --yes
+    command -v bash >/dev/null 2>&1 || { if command -v opkg >/dev/null 2>&1; then opkg update && opkg install bash; else apk update && apk add bash; fi; }; VOLWG_PAIR_CODE='VOLWG1...' VOLWG_REF='v1.4.28' bash -c "$(curl -fsSL https://raw.githubusercontent.com/chnnic/volwg/v1.4.28/install.sh || wget -qO- …)" volwg pair --role home --yes
 
 它会：
 

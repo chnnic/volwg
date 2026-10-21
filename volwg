@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 REPO_RAW_URL="https://raw.githubusercontent.com/chnnic/volwg/main"
-BUILTIN_VERSION="1.4.27"
+BUILTIN_VERSION="1.4.28"
 
 find_lib_dir() {
   local launcher_dir user_data_dir
@@ -269,8 +269,9 @@ management_menu() {
     echo "  7) 按序号删除本机线路"
     echo "  8) 查看线路详情（含 WireGuard 运行信息）"
     echo "  9) 修改家宽 WireGuard 本地端口（在家宽机执行）"
+    echo " 10) 切换推荐入口 relay（公网）/ direct（私网）"
     echo "  0) 返回主菜单    q) 退出"
-    read -r -p "请选择 [0-9/q]：" choice
+    read -r -p "请选择 [0-10/q]：" choice
     case "$choice" in
       1) bash "$LIB_DIR/wg-home-manager.sh" menu ;;
       2) clear_screen; bash "$LIB_DIR/wg-home-manager.sh" links; pause_screen ;;
@@ -281,6 +282,7 @@ management_menu() {
       7) bash "$LIB_DIR/wg-home-manager.sh" delete-menu; pause_screen ;;
       8) bash "$LIB_DIR/wg-home-manager.sh" details-menu; pause_screen ;;
       9) bash "$LIB_DIR/wg-home-manager.sh" wg-port-menu; pause_screen ;;
+      10) bash "$LIB_DIR/wg-home-manager.sh" mode-menu; pause_screen ;;
       0) return ;;
       q|Q) clear_screen; exit 0 ;;
       *) echo "选择无效。"; pause_screen ;;
@@ -324,6 +326,8 @@ VolWG 命令：
   volwg diagnose ID        诊断指定线路的 WG、SS、转发和 SSH
   volwg ssh ID             从 VPS 通过 WireGuard 进入家宽机 SSH
   volwg manager show ID    查看线路详情与 WireGuard 握手、流量、endpoint
+  volwg manager mode ID relay|direct
+                            切换推荐入口：relay 公网链接 / direct 私网链接
   volwg manager wg-port ID [端口]
                             家宽机修改本地 WireGuard 端口；不填端口自动选可用端口
   volwg wan-follow enable --node ID

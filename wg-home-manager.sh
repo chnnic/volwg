@@ -55,6 +55,8 @@ usage() {
   volwg manager list             查看所有线路
   volwg manager links            查看所有线路的 SS 链接
   volwg manager show 节点ID      查看单条线路详情（含 WireGuard 运行信息）
+  volwg manager mode ID relay|direct
+                                 切换推荐入口：relay 公网链接 / direct 私网链接（在 VPS 执行）
   volwg manager wg-port ID [端口]
                                  修改家宽机本地 WireGuard 端口（在家宽机执行）
   volwg manager status           查看 WireGuard 握手状态
@@ -1283,6 +1285,81 @@ set_home_wg_port() {
   [[ -n "$file" ]] || echo "提示：本机没有该线路记录（远程部署），已只修改接口配置。"
 }
 
+set_node_mode() {
+  # 只切换默认推荐的入口（默认链接、默认 Xray outbound）；公网与私网链接、
+  # WireGuard、转发规则和 SS 密钥都不变，两套链接继续可用。
+  local id="$1" mode="$2" file manual prefix endpoint port link outbound current stamp tmp_file
+  valid_node_id "$id" || die "节点 ID 无效"
+  [[ "$mode" == relay || "$mode" == direct ]] || die "模式必须是 relay 或 direct"
+  file="$STATE_DIR/$id.conf"
+  [[ -f "$file" ]] || die "本机没有线路 $id 的 VPS 记录；推荐入口需要在 VPS 上切换"
+  [[ -w "$file" ]] || die "没有写入权限，请使用 root 运行"
+  current="$(field "$file" MODE)"
+  if [[ "$current" == "$mode" ]]; then
+    echo "线路 $id 已是 $mode 模式，未修改。"
+    return 0
+  fi
+  if [[ "$mode" == relay ]]; then
+    prefix=PUBLIC
+    [[ "$(field "$file" PUBLIC_SS_ENABLED)" == 1 ]] || die "线路 $id 未开放公网 SS，不能切换为 relay"
+    port="$(field_fallback "$file" VPS_SS_PORT SS_PORT)"
+  else
+    prefix=PRIVATE
+    port="$(field_fallback "$file" HOME_SS_PORT SS_PORT)"
+  fi
+  endpoint="$(field "$file" "${prefix}_SS_ENDPOINT")"
+  link="$(field "$file" "${prefix}_SS_LINK_B64")"
+  outbound="$(decode "$(field "$file" "${prefix}_XRAY_OUTBOUND_B64")")"
+  [[ -n "$endpoint" && -n "$link" && -n "$outbound" && -n "$port" ]] || \
+    die "线路 $id 的记录缺少 ${prefix} 链接信息（旧版记录），请用 volwg manager register 重新登记"
+  # 默认 outbound 使用不带 -public/-private 后缀的 tag，与新建线路一致。
+  outbound="${outbound/\"home-$id-public\"/\"home-$id\"}"
+  outbound="${outbound/\"home-$id-private\"/\"home-$id\"}"
+  outbound="$(encode "$outbound")"
+
+  stamp="$(date +%Y%m%d-%H%M%S)"
+  cp -p "$file" "$file.before-mode.$stamp"
+  tmp_file="$(mktemp "$file.volwg.XXXXXX")"
+  awk -v mode="$mode" -v ep="$endpoint" -v port="$port" -v link="$link" -v out="$outbound" -F= '
+    $1 == "MODE" {print "MODE=" mode; next}
+    $1 == "SS_ENDPOINT" {print "SS_ENDPOINT=" ep; next}
+    $1 == "SS_PORT" {print "SS_PORT=" port; next}
+    $1 == "SS_LINK_B64" {print "SS_LINK_B64=" link; next}
+    $1 == "XRAY_OUTBOUND_B64" {print "XRAY_OUTBOUND_B64=" out; next}
+    {print}' "$file" >"$tmp_file"
+  chmod 600 "$tmp_file"
+  mv -f "$tmp_file" "$file"
+  manual="$MANUAL_STATE_DIR/$id.conf"
+  if [[ -f "$manual" ]] && grep -q '^MODE=' "$manual"; then
+    tmp_file="$(mktemp "$manual.volwg.XXXXXX")"
+    sed "s/^MODE=.*/MODE=$mode/" "$manual" >"$tmp_file"
+    chmod 600 "$tmp_file"
+    mv -f "$tmp_file" "$manual"
+  fi
+  echo "线路 $id 已切换为 ${mode}，默认入口：$endpoint"
+  echo "原记录已备份：$file.before-mode.$stamp"
+  echo "公网和私网链接都继续可用；WireGuard、转发和 SS 密钥未改动。"
+  echo "查看链接：volwg manager links"
+}
+
+interactive_set_mode() {
+  local mode_choice current
+  choose_node || return 0
+  clear_screen
+  manager_header "切换推荐入口 · $SELECTED_NODE"
+  current="$(field "$STATE_DIR/$SELECTED_NODE.conf" MODE)"
+  echo "当前模式：${current:-未记录}"
+  echo "  1) relay：推荐公网 SS，手机/电脑/其他 VPS 都能用"
+  echo "  2) direct：推荐 WireGuard 私网 SS，只有本 VPS 上的 Xray 能用"
+  echo "  0) 返回"
+  read -r -p "请选择 [0-2]：" mode_choice || return 0
+  case "$mode_choice" in
+    1) ( set_node_mode "$SELECTED_NODE" relay ) || true ;;
+    2) ( set_node_mode "$SELECTED_NODE" direct ) || true ;;
+    *) return 0 ;;
+  esac
+}
+
 interactive_set_home_port() {
   choose_any_node "修改家宽 WireGuard 端口" || return 0
   clear_screen
@@ -1308,8 +1385,9 @@ menu() {
     echo "  9) 删除线路（停止服务并归档）"
     echo " 10) 登记旧版或手工线路"
     echo " 11) 修改家宽 WireGuard 本地端口（在家宽机执行）"
+    echo " 12) 切换推荐入口 relay（公网）/ direct（私网）"
     echo "  0) 返回上级菜单    q) 退出"
-    read -r -p "请选择 [0-11/q]：" choice
+    read -r -p "请选择 [0-12/q]：" choice
     echo
     case "$choice" in
       1) clear_screen; manager_header "全部 SS 链接"; list_links; pause_screen ;;
@@ -1354,6 +1432,7 @@ menu() {
       9) interactive_delete; pause_screen ;;
       10) clear_screen; manager_header "登记已有线路"; register_node; pause_screen ;;
       11) interactive_set_home_port; pause_screen ;;
+      12) interactive_set_mode; pause_screen ;;
       0) return ;;
       q|Q) clear_screen; exit 0 ;;
       *) echo "选择无效。"; pause_screen ;;
@@ -1376,6 +1455,8 @@ case "$command_name" in
     ;;
   wg-port) [[ -n "${2:-}" ]] || die "用法：volwg manager wg-port ID [端口]"; set_home_wg_port "$2" "${3:-}" ;;
   wg-port-menu) interactive_set_home_port ;;
+  mode) [[ -n "${2:-}" && -n "${3:-}" ]] || die "用法：volwg manager mode ID relay|direct"; set_node_mode "$2" "$3" ;;
+  mode-menu) interactive_set_mode ;;
   status) show_status ;;
   diagnose) [[ -n "${2:-}" ]] || die "用法：volwg manager diagnose ID [SSH端口]"; diagnose_node "$(node_file "$2")" "${3:-}" ;;
   diagnose-menu) interactive_diagnose ;;

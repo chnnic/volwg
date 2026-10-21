@@ -1430,9 +1430,9 @@ if [[ "$FULL_STACK" == "1" ]]; then
     esac
   fi
   if [[ "$ROLE" == "vps" && "$PAIR_CODE_LOADED" != "1" ]]; then
-    echo "推荐入口："
-    echo "  1) relay：默认推荐公网 SS"
-    echo "  2) direct：默认推荐 WireGuard 私网 SS"
+    echo "推荐入口（两套链接都会生成，以后可用 volwg manager mode 切换）："
+    echo "  1) relay：默认推荐公网 SS，手机/电脑/其他 VPS 都能用（推荐）"
+    echo "  2) direct：默认推荐 WireGuard 私网 SS，只有本 VPS 上的 Xray 能用"
     read -r -p "请选择 [1-2，默认 1]：" mode_choice
     case "${mode_choice:-1}" in
       1) MODE="relay" ;;
