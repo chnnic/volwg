@@ -179,6 +179,15 @@ OpenWrt 如果原有 Dropbear 只绑定 LAN 接口，即使相同端口已被占
 
 也可在菜单选择“线路管理 → 切换推荐入口”。切换前会备份线路记录；未开放公网 SS 的线路不能切换为 relay。
 
+### VPS 装有 Docker 或 ufw 时
+
+Docker、ufw 会把 iptables 的 FORWARD 默认策略设为 DROP，公网 SS 流量在转发到 WireGuard 时会被丢弃：诊断显示转发规则正常，但客户端连不上。VolWG 会在这种情况下自动为每条开放公网 SS 的线路添加放行规则：有 Docker 时放在 Docker 预留的 `DOCKER-USER` 链，否则放在 FORWARD 链顶部；规则只匹配“公网网卡 → 本线路家宽 SS 端口”及其回包，并以注释 `volwg-节点ID` 标记，不改动其他防火墙规则。开机服务 `volwg-forward.service` 在 Docker 之后重新同步，删除线路或 `volwg purge` 时一并清除。
+
+    volwg forward status     # 查看 FORWARD 策略与 VolWG 放行规则
+    volwg forward sync       # 按线路记录重新同步
+
+已有线路执行 `volwg update` 时自动补上。若使用其他防火墙（例如自定义 nftables 表里 forward 默认 drop），需要自行放行到 WireGuard 接口的转发。
+
 ## 公网与私网 SS 链接
 
 每次新部署默认生成两套入口，它们使用同一台家宽机上的 SS2022 服务、同一密钥和同一出口：
@@ -318,7 +327,7 @@ VPS 与家宽机可以使用不同 SSH 私钥。交互向导会分别询问两�
 
 VPS 完成本机设置后，会输出一条**家宽机一键安装命令**，并等待家宽公钥。家宽机不需要事先安装 VolWG：把整行命令粘贴到家宽机的 root SSH 窗口执行即可（Debian/Ubuntu 普通用户先 `sudo -i`）。命令形如：
 
-    command -v bash >/dev/null 2>&1 || { if command -v opkg >/dev/null 2>&1; then opkg update && opkg install bash; else apk update && apk add bash; fi; }; VOLWG_PAIR_CODE='VOLWG1...' VOLWG_REF='v1.4.28' bash -c "$(curl -fsSL https://raw.githubusercontent.com/chnnic/volwg/v1.4.28/install.sh || wget -qO- …)" volwg pair --role home --yes
+    command -v bash >/dev/null 2>&1 || { if command -v opkg >/dev/null 2>&1; then opkg update && opkg install bash; else apk update && apk add bash; fi; }; VOLWG_PAIR_CODE='VOLWG1...' VOLWG_REF='v1.4.29' bash -c "$(curl -fsSL https://raw.githubusercontent.com/chnnic/volwg/v1.4.29/install.sh || wget -qO- …)" volwg pair --role home --yes
 
 它会：
 
@@ -539,6 +548,7 @@ VPS 和家宽机都可以查看本机线路详情：
 - wg-home-deploy.sh：完整部署脚本和引导式入口。
 - wg-home-key-wizard.sh：双 SSH 窗口完整部署及纯 WireGuard 公钥交换向导。
 - wg-home-manager.sh：安装到 VPS 的多线路查看和 SS 链接管理后台。
+- wg-home-forward.sh：VPS 在 Docker/ufw 环境下放行公网 SS 转发。
 - wg-home-remove.sh：按节点停止服务并归档删除 VPS/家宽端配置。
 - wg-home-purge.sh：清空本机全部 VolWG 线路、旧版配置和活动记录。
 - wg-home-wan-follow.sh：OpenWrt WireGuard 的 WAN 跟随、主动探测和换 IP 自动恢复服务。

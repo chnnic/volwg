@@ -174,6 +174,9 @@ else
     if command -v nft >/dev/null 2>&1; then
       nft list table ip "$WG_IFACE" >/dev/null 2>&1 && nft delete table ip "$WG_IFACE" || true
     fi
+    # 删除本线路的转发放行规则（Docker/ufw 环境）。
+    forward_helper="$(dirname -- "${BASH_SOURCE[0]}")/wg-home-forward.sh"
+    [[ ! -f "$forward_helper" ]] || bash "$forward_helper" remove --node "$NODE_ID" || true
     archive_item "/etc/systemd/system/$NFT_SERVICE.service"
     archive_item "/usr/local/sbin/$NFT_SERVICE"
     archive_item "$NODE_STATE"

@@ -1456,10 +1456,15 @@ scp_vps "$SCRIPT_DIR/wg-home-key-wizard.sh" /tmp/volwg-key-wizard
 scp_vps "$SCRIPT_DIR/wg-home-remove.sh" /tmp/volwg-remove
 scp_vps "$SCRIPT_DIR/wg-home-purge.sh" /tmp/volwg-purge
 scp_vps "$SCRIPT_DIR/wg-home-wan-follow.sh" /tmp/volwg-wan-follow
+scp_vps "$SCRIPT_DIR/wg-home-forward.sh" /tmp/volwg-forward
 scp_vps "$SCRIPT_DIR/volwg" /tmp/volwg-launcher
 scp_vps "$SCRIPT_DIR/VERSION" /tmp/volwg-version
 scp_vps "$TMP_DIR/node.conf" "/tmp/$NODE_ID.conf"
-ssh_vps "set -eu; install -d -m 755 /usr/local/lib/volwg /usr/local/bin; install -m 700 /tmp/volwg-deploy /usr/local/lib/volwg/wg-home-deploy.sh; install -m 700 /tmp/volwg-key-wizard /usr/local/lib/volwg/wg-home-key-wizard.sh; install -m 700 /tmp/volwg-remove /usr/local/lib/volwg/wg-home-remove.sh; install -m 700 /tmp/volwg-purge /usr/local/lib/volwg/wg-home-purge.sh; install -m 700 /tmp/volwg-wan-follow /usr/local/lib/volwg/wg-home-wan-follow.sh; install -m 700 /tmp/wg-home-manager /usr/local/lib/volwg/wg-home-manager.sh; install -m 644 /tmp/volwg-version /usr/local/lib/volwg/VERSION; install -m 755 /tmp/volwg-launcher /usr/local/bin/volwg; install -m 755 /tmp/wg-home-manager /usr/local/sbin/wg-home-manager; install -d -m 700 /etc/wg-home-exit/nodes; install -m 600 '/tmp/$NODE_ID.conf' '/etc/wg-home-exit/nodes/$NODE_ID.conf'; rm -f /tmp/wg-home-manager /tmp/volwg-deploy /tmp/volwg-key-wizard /tmp/volwg-remove /tmp/volwg-purge /tmp/volwg-wan-follow /tmp/volwg-launcher /tmp/volwg-version '/tmp/$NODE_ID.conf'"
+ssh_vps "set -eu; install -d -m 755 /usr/local/lib/volwg /usr/local/bin; install -m 700 /tmp/volwg-deploy /usr/local/lib/volwg/wg-home-deploy.sh; install -m 700 /tmp/volwg-key-wizard /usr/local/lib/volwg/wg-home-key-wizard.sh; install -m 700 /tmp/volwg-remove /usr/local/lib/volwg/wg-home-remove.sh; install -m 700 /tmp/volwg-purge /usr/local/lib/volwg/wg-home-purge.sh; install -m 700 /tmp/volwg-wan-follow /usr/local/lib/volwg/wg-home-wan-follow.sh; install -m 700 /tmp/volwg-forward /usr/local/lib/volwg/wg-home-forward.sh; install -m 700 /tmp/wg-home-manager /usr/local/lib/volwg/wg-home-manager.sh; install -m 644 /tmp/volwg-version /usr/local/lib/volwg/VERSION; install -m 755 /tmp/volwg-launcher /usr/local/bin/volwg; install -m 755 /tmp/wg-home-manager /usr/local/sbin/wg-home-manager; install -d -m 700 /etc/wg-home-exit/nodes; install -m 600 '/tmp/$NODE_ID.conf' '/etc/wg-home-exit/nodes/$NODE_ID.conf'; rm -f /tmp/wg-home-manager /tmp/volwg-deploy /tmp/volwg-key-wizard /tmp/volwg-remove /tmp/volwg-purge /tmp/volwg-wan-follow /tmp/volwg-forward /tmp/volwg-launcher /tmp/volwg-version '/tmp/$NODE_ID.conf'"
+if [[ "$PUBLIC_SS_ENABLED" == "1" ]]; then
+  # Docker/ufw 会把 FORWARD 默认设为 DROP；只放行本机线路的公网 SS 转发。
+  ssh_vps "bash /usr/local/lib/volwg/wg-home-forward.sh enable" || echo "提示：VPS 公网 SS 转发放行失败，请在 VPS 运行 volwg forward status 检查。" >&2
+fi
 
 # 同步删除工具到家宽端，确保两端都能用同一个 volwg remove 命令清理本机线路。
 scp_openwrt "$SCRIPT_DIR/wg-home-manager.sh" /tmp/wg-home-manager

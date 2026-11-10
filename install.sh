@@ -44,13 +44,14 @@ download "$REPO_RAW_URL/wg-home-manager.sh" "$TMP_DIR/wg-home-manager.sh"
 download "$REPO_RAW_URL/wg-home-remove.sh" "$TMP_DIR/wg-home-remove.sh"
 download "$REPO_RAW_URL/wg-home-purge.sh" "$TMP_DIR/wg-home-purge.sh"
 download "$REPO_RAW_URL/wg-home-wan-follow.sh" "$TMP_DIR/wg-home-wan-follow.sh"
+download "$REPO_RAW_URL/wg-home-forward.sh" "$TMP_DIR/wg-home-forward.sh"
 download "$REPO_RAW_URL/volwg" "$TMP_DIR/volwg"
 download "$REPO_RAW_URL/VERSION" "$TMP_DIR/VERSION"
 # 所有组件通过语法检查再替换，避免带入无法启动的脚本。
 for component in "$TMP_DIR"/*.sh "$TMP_DIR/volwg"; do
   bash -n "$component"
 done
-chmod 700 "$TMP_DIR/wg-home-deploy.sh" "$TMP_DIR/wg-home-key-wizard.sh" "$TMP_DIR/wg-home-manager.sh" "$TMP_DIR/wg-home-remove.sh" "$TMP_DIR/wg-home-purge.sh" "$TMP_DIR/wg-home-wan-follow.sh"
+chmod 700 "$TMP_DIR/wg-home-deploy.sh" "$TMP_DIR/wg-home-key-wizard.sh" "$TMP_DIR/wg-home-manager.sh" "$TMP_DIR/wg-home-remove.sh" "$TMP_DIR/wg-home-purge.sh" "$TMP_DIR/wg-home-wan-follow.sh" "$TMP_DIR/wg-home-forward.sh"
 chmod 755 "$TMP_DIR/volwg"
 
 if [[ "${VOLWG_TEMPORARY:-0}" == "1" ]]; then
@@ -73,7 +74,7 @@ else
 fi
 
 mkdir -p "$INSTALL_LIB_DIR" "$INSTALL_BIN_DIR"
-for component in wg-home-deploy.sh wg-home-key-wizard.sh wg-home-manager.sh wg-home-remove.sh wg-home-purge.sh wg-home-wan-follow.sh; do
+for component in wg-home-deploy.sh wg-home-key-wizard.sh wg-home-manager.sh wg-home-remove.sh wg-home-purge.sh wg-home-wan-follow.sh wg-home-forward.sh; do
   atomic_install "$TMP_DIR/$component" "$INSTALL_LIB_DIR/$component" 700
 done
 atomic_install "$TMP_DIR/VERSION" "$INSTALL_LIB_DIR/VERSION" 644
@@ -84,6 +85,13 @@ echo "VolWG 已安装：$INSTALL_BIN_DIR/volwg"
 if [[ "$(id -u)" == 0 && -f /etc/openwrt_release && "$INSTALL_LIB_DIR" == /usr/lib/volwg ]]; then
   if ! bash "$INSTALL_LIB_DIR/wg-home-wan-follow.sh" refresh-all; then
     echo "提示：部分家宽线路的自动恢复未能刷新，请运行 volwg wan-follow status --node 节点ID 检查。" >&2
+  fi
+fi
+# VPS 端已有公网 SS 线路时，升级后补上转发放行（Docker/ufw 会把 FORWARD 默认设为 DROP）。
+if [[ "$(id -u)" == 0 && ! -f /etc/openwrt_release && "$INSTALL_LIB_DIR" == /usr/local/lib/volwg ]] \
+  && command -v systemctl >/dev/null 2>&1 && grep -qsE '^(PUBLIC_SS_ENABLED=1|MODE=relay)$' /etc/wg-home-exit/nodes/*.conf; then
+  if ! bash "$INSTALL_LIB_DIR/wg-home-forward.sh" enable; then
+    echo "提示：公网 SS 转发放行未能更新，请运行 volwg forward status 检查。" >&2
   fi
 fi
 if [[ ":$PATH:" != *":$INSTALL_BIN_DIR:"* ]]; then
