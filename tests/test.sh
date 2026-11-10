@@ -431,5 +431,54 @@ grep -Fq 'remove_line_ssh_keys' "$ROOT_DIR/wg-home-purge.sh"
   grep -Fxq 'commit' "$MT/uci.log"
 )
 
+# VPS 转发放行：FORWARD 为 DROP 或有 Docker 时，只为开放公网 SS 的线路添加带注释的规则。
+(
+  FT="$TEST_DIR/forward"
+  mkdir -p "$FT/nodes"
+  printf '%s\n' 'NODE_ID=fa' 'PUBLIC_SS_ENABLED=1' 'WG_INTERFACE=wgh_fa' 'WG_PREFIX=10.99.0' 'HOME_SS_PORT=31770' >"$FT/nodes/fa.conf"
+  printf '%s\n' 'NODE_ID=fb' 'PUBLIC_SS_ENABLED=0' 'WG_INTERFACE=wgh_fb' 'WG_PREFIX=10.99.1' 'HOME_SS_PORT=31771' >"$FT/nodes/fb.conf"
+  WG_HOME_STATE_DIR="$FT/nodes"
+  # shellcheck source=../wg-home-forward.sh
+  source "$ROOT_DIR/wg-home-forward.sh"
+  RULES="$FT/rules"; POLICY=DROP DOCKER=1
+  : >"$RULES"
+  printf '%s\n' '-A FORWARD -j DOCKER-USER' '-A DOCKER-USER -s 172.17.0.0/16 -j RETURN' >"$RULES"
+  iptables() {
+    local op="$1" chain="${2:-}" rest
+    case "$op" in
+      -S)
+        [[ "$chain" == DOCKER-USER && "$DOCKER" != 1 ]] && return 1
+        [[ "$chain" == FORWARD ]] && echo "-P FORWARD $POLICY"
+        [[ "$chain" == DOCKER-USER ]] && echo "-N DOCKER-USER"
+        grep -F -- "-A $chain " "$RULES" || true ;;
+      -I) shift 3; rest="$*"; { echo "-A $chain $rest"; cat "$RULES"; } >"$RULES.new"; mv "$RULES.new" "$RULES" ;;
+      -D) shift 2; rest="$*"; grep -vxF -- "-A $chain $rest" "$RULES" >"$RULES.new" || true; mv "$RULES.new" "$RULES" ;;
+      *) echo "unexpected iptables $*" >&2; return 1 ;;
+    esac
+  }
+  nft() { [[ "$*" == "list table ip wgh_fa" ]] && printf '  iifname "ens18" tcp dport 31770 counter dnat to 10.99.0.2:31770\n'; }
+  ip() { echo 'default via 192.0.2.1 dev eth9'; }
+  sync_rules >/dev/null
+  sync_rules >/dev/null
+  [[ "$(grep -c -- '--comment volwg-fa' "$RULES")" == 3 ]]
+  grep -Fxq -- '-A DOCKER-USER -i ens18 -o wgh_fa -d 10.99.0.2 -p tcp --dport 31770 -m comment --comment volwg-fa -j ACCEPT' "$RULES"
+  grep -Fxq -- '-A DOCKER-USER -i wgh_fa -o ens18 -s 10.99.0.2 -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment volwg-fa -j ACCEPT' "$RULES"
+  if grep -Fq 'volwg-fb' "$RULES"; then echo 'FAIL: private-only line was opened' >&2; exit 1; fi
+  grep -Fxq -- '-A DOCKER-USER -s 172.17.0.0/16 -j RETURN' "$RULES"
+  # 没有 Docker、FORWARD 为 DROP（ufw）时放在 FORWARD 链；ACCEPT 且无 Docker 时不加规则。
+  delete_rules fa; DOCKER=0
+  [[ "$(grep -c -- 'volwg-' "$RULES")" == 0 ]]
+  sync_rules >/dev/null
+  grep -Fq -- '-A FORWARD -i ens18 -o wgh_fa' "$RULES"
+  POLICY=ACCEPT
+  sync_rules >/dev/null
+  [[ "$(grep -c -- 'volwg-' "$RULES")" == 0 ]]
+  grep -Fxq -- '-A FORWARD -j DOCKER-USER' "$RULES"
+)
+grep -Fq 'wg-home-forward.sh' "$ROOT_DIR/install.sh"
+grep -Fq 'bash "$forward_helper" remove --node' "$ROOT_DIR/wg-home-remove.sh"
+grep -Fq '/tmp/volwg-forward /usr/local/lib/volwg/wg-home-forward.sh' "$ROOT_DIR/wg-home-deploy.sh"
+grep -Fq 'forward) shift; exec bash "$LIB_DIR/wg-home-forward.sh"' "$ROOT_DIR/volwg"
+
 bash "$ROOT_DIR/tests/wan-follow.sh"
 echo "VolWG tests: PASS"

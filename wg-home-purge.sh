@@ -242,8 +242,24 @@ if [[ "$SYSTEM_KIND" == "linux" ]]; then
   systemctl daemon-reload
 fi
 
+# 清除全部 VolWG 转发放行规则；保留程序时开机服务会按（已清空的）线路记录同步。
+if [[ "$SYSTEM_KIND" == "linux" ]] && command -v iptables >/dev/null 2>&1; then
+  for forward_chain in DOCKER-USER FORWARD; do
+    iptables -S "$forward_chain" >/dev/null 2>&1 || continue
+    while IFS= read -r forward_rule; do
+      read -r -a forward_spec <<<"${forward_rule#-A }"
+      iptables -D "${forward_spec[@]}" 2>/dev/null || true
+    done < <(iptables -S "$forward_chain" 2>/dev/null | grep -E -- "^-A $forward_chain .*--comment volwg-[a-z0-9][a-z0-9_]{0,7}( |\$)" || true)
+  done
+fi
+
 if [[ "$UNINSTALL" == "1" ]]; then
   echo "正在卸载 VolWG 程序..."
+  if [[ -f /etc/systemd/system/volwg-forward.service ]]; then
+    systemctl disable volwg-forward.service >/dev/null 2>&1 || true
+    archive_item /etc/systemd/system/volwg-forward.service
+    systemctl daemon-reload >/dev/null 2>&1 || true
+  fi
   archive_item /usr/local/lib/volwg
   archive_item /usr/local/bin/volwg
   archive_item /usr/lib/volwg

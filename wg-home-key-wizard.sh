@@ -1803,6 +1803,10 @@ if [[ "$FULL_STACK" == "1" ]]; then
   if [[ "$ROLE" == "vps" ]]; then
     configure_vps_forwarding
     save_vps_full_state
+    # Docker/ufw 会把 FORWARD 默认设为 DROP；只放行本机线路的公网 SS 转发。
+    if [[ "$PUBLIC_SS_ENABLED" == "1" && -f "$SCRIPT_DIR/wg-home-forward.sh" ]]; then
+      bash "$SCRIPT_DIR/wg-home-forward.sh" enable || echo "提示：公网 SS 转发放行失败，请运行 volwg forward status 检查。" >&2
+    fi
   else
     configure_home_ss
   fi
